@@ -11,7 +11,7 @@ from app.api.v1.services.hospital_request_service import (
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 VALID_BLOOD_GROUPS = {"O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"}
-VALID_COMPONENTS = {"BLOOD", "PLATELETS", "PLASMA"}
+VALID_COMPONENTS = {"SANGRE", "PLAQUETAS", "MEDULA_OSEA"}
 
 def _get_hospital_id_or_401(current_user: dict) -> str:
     hospital_id = current_user.get("uid") if current_user else None
@@ -31,7 +31,7 @@ def create_hospital_request_controller(body: HospitalRequestCreate, current_user
 
     component = body.component.strip().upper()
     if component not in VALID_COMPONENTS:
-        raise HTTPException(status_code=400, detail="Invalid component (use BLOOD / PLATELETS / PLASMA)")
+        raise HTTPException(status_code=400, detail="Invalid component (use SANGRE / PLAQUETAS / MEDULA_OSEA)")
 
     requested_by = body.requested_by.strip()
     if not requested_by:

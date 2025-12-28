@@ -14,7 +14,7 @@ def create_hospital_request_service(
 
     data["hospital_id"] = hospital_id
     data["datetime_local"] = now_ba_iso
-    data["status"] = "ACTIVE"
+    data["status"] = "ACTIVO"
     data["blood_group"] = normalized_blood_group
     data["component"] = normalized_component
 

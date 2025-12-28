@@ -2,8 +2,8 @@ from pydantic import BaseModel, Field
 from typing import Literal
 from datetime import date
 
-DonationType = Literal["BLOOD", "PLATELETS", "BONE_MARROW"]
-AppointmentStatus = Literal["SCHEDULED", "CONFIRMED", "CANCELLED", "COMPLETED", "NO_SHOW"]
+DonationType = Literal["SANGRE", "PLAQUETAS", "MEDULA_ÓSEA"]
+AppointmentStatus = Literal["PROGRAMADO", "CONFIRMADO", "CANCELADO", "COMPLETADO", "NO_PRESENTADO"]
 AppointmentSource = Literal["HOSPITAL_MANUAL", "CHATBOT_WHATSAPP"]
 
 class Donor(BaseModel):

@@ -36,7 +36,7 @@ def create_appointment_manual_service(hospital_id: str, appointment: Appointment
 
     data["hospital_id"] = hospital_id
     data["source"] = "HOSPITAL_MANUAL"
-    data["status"] = "SCHEDULED"
+    data["status"] = "PROGRAMADO"
 
     if data.get("date_local") is not None:
         data["date_local"] = data["date_local"].isoformat()

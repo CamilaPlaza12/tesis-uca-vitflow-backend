@@ -1,8 +1,8 @@
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
 
-HospitalRequestPriority = Literal["NORMAL", "URGENT", "CRITICAL"]
-HospitalRequestStatus = Literal["ACTIVE", "CLOSED", "CANCELLED"]
+HospitalRequestPriority = Literal["NORMAL", "URGENTE", "CRITICO"]
+HospitalRequestStatus = Literal["ACTIVO", "COMPLETADO", "CANCELADO"]
 
 HospitalUnit = Literal[
     "ITU",

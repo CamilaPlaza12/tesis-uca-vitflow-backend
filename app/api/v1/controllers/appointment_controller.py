@@ -62,10 +62,10 @@ def create_appointment_manual_controller(appointment: AppointmentCreate, current
     if not hospital_request:
         raise HTTPException(status_code=404, detail="HospitalRequest not found")
 
-    if hospital_request.get("status") != "ACTIVE":
+    if hospital_request.get("status") != "ACTIVO":
         raise HTTPException(
             status_code=409,
-            detail="Cannot create appointment: HospitalRequest is not ACTIVE"
+            detail="Cannot create appointment: HospitalRequest is not ACTIVO"
         )
 
     if not appointment.donor.full_name.strip():
@@ -101,7 +101,7 @@ def create_appointment_manual_controller(appointment: AppointmentCreate, current
     return create_appointment_manual_service(hospital_id, appointment)
 
 def _validate_status_transition(current_status: str, new_status: str):
-    terminal = {"CANCELLED", "COMPLETED", "NO_SHOW"}
+    terminal = {"CANCELADO", "COMPLETADO", "NO_PRESENTADO"}
     if current_status in terminal:
         raise HTTPException(
             status_code=409,
@@ -109,8 +109,8 @@ def _validate_status_transition(current_status: str, new_status: str):
         )
 
     allowed = {
-        "SCHEDULED": {"CONFIRMED", "CANCELLED", "NO_SHOW"},
-        "CONFIRMED": {"COMPLETED", "CANCELLED", "NO_SHOW"},
+        "PROGRAMADO": {"CONFIRMADO", "CANCELADO", "NO_PRESENTADO"},
+        "CONFIRMADO": {"COMPLETADO", "CANCELADO", "NO_PRESENTADO"},
     }
 
     if current_status not in allowed:
@@ -168,7 +168,7 @@ def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppoi
     if not existing:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
-    if existing.get("status") in {"CANCELLED", "COMPLETED", "NO_SHOW"}:
+    if existing.get("status") in {"CANCELADO", "COMPLETADO", "NO_PRESENTADO"}:
         raise HTTPException(
             status_code=409,
             detail=f"Cannot reschedule appointment in state {existing.get('status')}",
