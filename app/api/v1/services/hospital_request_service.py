@@ -15,6 +15,7 @@ def create_hospital_request_service(
     data["hospital_id"] = hospital_id
     data["datetime_local"] = now_ba_iso
     data["status"] = "ACTIVO"
+    data["collected_ml"] = 0
     data["blood_group"] = normalized_blood_group
     data["component"] = normalized_component
 
@@ -54,4 +55,24 @@ def get_hospital_request_by_id_service(hospital_id: str, request_id: str):
 
     data["id"] = snap.id
     return data
+
+def update_hospital_request_service(hospital_id: str, request_id: str, patch: dict):
+    doc_ref = db.collection(COLLECTION).document(request_id)
+    snap = doc_ref.get()
+
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    data = snap.to_dict() or {}
+    if data.get("hospital_id") != hospital_id:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    patch.pop("requested_ml", None)
+    patch.pop("collected_ml", None)
+
+    doc_ref.update(patch)
+
+    updated = {**data, **patch}
+    updated["id"] = request_id
+    return updated
 
