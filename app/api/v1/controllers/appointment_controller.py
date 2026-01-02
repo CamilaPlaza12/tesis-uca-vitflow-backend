@@ -1,59 +1,72 @@
-
 from fastapi import HTTPException, status
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-from app.schemas.appointment_schema import AppointmentCreate, RescheduleAppointmentRequest, UpdateAppointmentStatusRequest
+from app.schemas.appointment_schema import (
+    AppointmentCreate,
+    RescheduleAppointmentRequest,
+    UpdateAppointmentStatusRequest,
+)
 
-from app.api.v1.services.appointment_service import get_appointments_service, get_appointment_by_id_service, create_appointment_manual_service, update_appointment_status_service, reschedule_appointment_service
+from app.api.v1.services.appointment_service import (
+    get_appointments_service,
+    get_appointment_by_id_service,
+    create_appointment_manual_service,
+    update_appointment_status_service,
+    reschedule_appointment_service,
+    apply_completion_side_effects_service,  # ✅ nuevo
+)
+
 from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 MIN_TIME = time(7, 0)
 MAX_TIME = time(20, 0)
+
+
 def get_appointments_controller(current_user: dict):
     hospital_id = current_user.get("uid")
     if not hospital_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid"
+            detail="Invalid token: missing uid",
         )
-
     return get_appointments_service(hospital_id)
+
 
 def get_appointment_by_id_controller(appointment_id: str, current_user: dict):
     hospital_id = current_user.get("uid") if current_user else None
     if not hospital_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid"
+            detail="Invalid token: missing uid",
         )
 
     if not appointment_id or not appointment_id.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="appointment_id is required"
+            detail="appointment_id is required",
         )
 
     appointment = get_appointment_by_id_service(hospital_id, appointment_id)
-
     if not appointment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Appointment not found"
+            detail="Appointment not found",
         )
 
     return appointment
+
 
 def create_appointment_manual_controller(appointment: AppointmentCreate, current_user: dict):
     hospital_id = current_user.get("uid") if current_user else None
     if not hospital_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid"
+            detail="Invalid token: missing uid",
         )
-    
+
     req_id = appointment.hospital_request_id.strip()
     if not req_id:
         raise HTTPException(status_code=400, detail="hospital_request_id is required")
@@ -65,7 +78,7 @@ def create_appointment_manual_controller(appointment: AppointmentCreate, current
     if hospital_request.get("status") != "ACTIVO":
         raise HTTPException(
             status_code=409,
-            detail="Cannot create appointment: HospitalRequest is not ACTIVO"
+            detail="Cannot create appointment: HospitalRequest is not ACTIVO",
         )
 
     if not appointment.donor.full_name.strip():
@@ -84,13 +97,13 @@ def create_appointment_manual_controller(appointment: AppointmentCreate, current
     if t < MIN_TIME or t > MAX_TIME:
         raise HTTPException(
             status_code=400,
-            detail=f"time_local must be between {MIN_TIME.strftime('%H:%M')} and {MAX_TIME.strftime('%H:%M')}"
+            detail=f"time_local must be between {MIN_TIME.strftime('%H:%M')} and {MAX_TIME.strftime('%H:%M')}",
         )
 
     if t.minute % 15 != 0:
         raise HTTPException(
             status_code=400,
-            detail="time_local must be in 15-minute intervals (00, 15, 30, 45)"
+            detail="time_local must be in 15-minute intervals (00, 15, 30, 45)",
         )
 
     now_ba = datetime.now(BA_TZ)
@@ -100,12 +113,13 @@ def create_appointment_manual_controller(appointment: AppointmentCreate, current
 
     return create_appointment_manual_service(hospital_id, appointment)
 
+
 def _validate_status_transition(current_status: str, new_status: str):
     terminal = {"CANCELADO", "COMPLETADO", "NO_PRESENTADO"}
     if current_status in terminal:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot change status from terminal state {current_status}"
+            detail=f"Cannot change status from terminal state {current_status}",
         )
 
     allowed = {
@@ -119,20 +133,21 @@ def _validate_status_transition(current_status: str, new_status: str):
     if new_status not in allowed[current_status]:
         raise HTTPException(
             status_code=409,
-            detail=f"Invalid status transition {current_status} -> {new_status}"
+            detail=f"Invalid status transition {current_status} -> {new_status}",
         )
+
 
 def update_appointment_status_controller(appointment_id: str, body: UpdateAppointmentStatusRequest, current_user: dict):
     hospital_id = current_user.get("uid") if current_user else None
     if not hospital_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid"
+            detail="Invalid token: missing uid",
         )
 
     if not appointment_id or not appointment_id.strip():
         raise HTTPException(status_code=400, detail="appointment_id is required")
-    
+
     existing = get_appointment_by_id_service(hospital_id, appointment_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Appointment not found")
@@ -145,20 +160,26 @@ def update_appointment_status_controller(appointment_id: str, body: UpdateAppoin
 
     if not current_status:
         raise HTTPException(status_code=409, detail="Appointment has no status")
+
     _validate_status_transition(current_status, new_status)
 
     updated = update_appointment_status_service(hospital_id, appointment_id, new_status)
     if not updated:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
+    # ✅ Efectos automáticos cuando un turno se completa (una sola vez)
+    if new_status == "COMPLETADO" and current_status != "COMPLETADO":
+        apply_completion_side_effects_service(hospital_id, updated)
+
     return updated
+
 
 def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppointmentRequest, current_user: dict):
     hospital_id = current_user.get("uid") if current_user else None
     if not hospital_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid"
+            detail="Invalid token: missing uid",
         )
 
     if not appointment_id or not appointment_id.strip():
@@ -183,13 +204,13 @@ def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppoi
     if t < MIN_TIME or t > MAX_TIME:
         raise HTTPException(
             status_code=400,
-            detail=f"time_local must be between {MIN_TIME.strftime('%H:%M')} and {MAX_TIME.strftime('%H:%M')}"
+            detail=f"time_local must be between {MIN_TIME.strftime('%H:%M')} and {MAX_TIME.strftime('%H:%M')}",
         )
 
     if t.minute % 15 != 0:
         raise HTTPException(
             status_code=400,
-            detail="time_local must be in 15-minute intervals (00, 15, 30, 45)"
+            detail="time_local must be in 15-minute intervals (00, 15, 30, 45)",
         )
 
     now_ba = datetime.now(BA_TZ)
@@ -202,6 +223,3 @@ def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppoi
         raise HTTPException(status_code=404, detail="Appointment not found")
 
     return updated
-
-
-

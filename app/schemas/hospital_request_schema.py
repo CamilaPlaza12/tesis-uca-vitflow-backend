@@ -6,10 +6,10 @@ HospitalRequestStatus = Literal["ACTIVO", "COMPLETO", "CANCELADO", "FINALIZADO"]
 
 HospitalUnit = Literal[
     "ITU",
-    "TERAPIA_INTENSIVA",
-    "GUARDIA",
-    "QUIROFANO",
-    "CLINICA_MEDICA"
+    "Terapia Intensiva",
+    "Guardia",
+    "Quirofano",
+    "Clinica Medica"
 ]
 
 class HospitalRequestCreate(BaseModel):

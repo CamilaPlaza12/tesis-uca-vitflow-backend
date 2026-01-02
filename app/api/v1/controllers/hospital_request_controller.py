@@ -64,7 +64,10 @@ def update_hospital_request_controller(
     if not existing:
         raise HTTPException(status_code=404, detail="HospitalRequest not found")
 
-    if existing.get("status") in {"COMPLETO", "CANCELADO"}:
+    existing_status = existing.get("status")
+
+    # COMPLETO y CANCELADO: terminal total
+    if existing_status in {"COMPLETO", "CANCELADO"}:
         raise HTTPException(
             status_code=409,
             detail="HospitalRequest cannot be edited in terminal status",
@@ -72,14 +75,19 @@ def update_hospital_request_controller(
 
     patch = body.model_dump(exclude_unset=True)
 
+    # ✅ FINALIZADO: no se edita manualmente (solo pasa a COMPLETO automáticamente)
+    if existing_status == "FINALIZADO":
+        raise HTTPException(
+            status_code=409,
+            detail="FINALIZADO requests cannot be edited (only automatic transition to COMPLETO)",
+        )
+
+    # ✅ COMPLETO es automático: no se setea manual
     if patch.get("status") == "COMPLETO":
-        collected = int(existing.get("collected_ml", 0) or 0)
-        requested = int(existing.get("requested_ml", 0) or 0)
-        if collected < requested:
-            raise HTTPException(
-                status_code=409,
-                detail="Cannot set status to COMPLETO: collected_ml is less than requested_ml",
-            )
+        raise HTTPException(
+            status_code=400,
+            detail="COMPLETO status is automatic and cannot be set manually",
+        )
 
     if "comments" in patch:
         c = (patch["comments"] or "").strip()
@@ -89,6 +97,7 @@ def update_hospital_request_controller(
         raise HTTPException(status_code=400, detail="No fields to update")
 
     return update_hospital_request_service(hospital_id, request_id, patch)
+
 
 def get_hospital_request_by_id_controller(request_id: str, current_user: dict):
     hospital_id = _get_hospital_id(current_user)
