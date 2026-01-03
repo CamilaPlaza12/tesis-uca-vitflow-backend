@@ -126,15 +126,19 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
         return
 
     # Vos dijiste: campos se llaman *_ml pero los están usando como litros por ahora
-    collected = float(hospital_request.get("collected_ml", 0) or 0)
-    requested = float(hospital_request.get("requested_ml", 0) or 0)
+    collected = float(hospital_request.get("collected_liters", 0) or 0)
+    requested = float(hospital_request.get("requested_liters", 0) or 0)
+
+    print("Applying completion side effects: requested =", requested)
 
     new_collected = collected + DONATION_LITERS_PER_COMPLETED_APPOINTMENT
 
     # para evitar floats feos tipo 1.90000000004
     new_collected = round(new_collected, 4)
 
-    patch = {"collected_ml": new_collected}
+    print("Applying completion side effects: new_collected =", new_collected)
+
+    patch = {"collected_liters": new_collected}
 
     if requested > 0 and new_collected >= requested:
         patch["status"] = "COMPLETO"

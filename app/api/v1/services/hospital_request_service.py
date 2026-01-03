@@ -15,7 +15,7 @@ def create_hospital_request_service(
     data["hospital_id"] = hospital_id
     data["datetime_local"] = now_ba_iso
     data["status"] = "ACTIVO"
-    data["collected_ml"] = 0
+    data["collected_liters"] = 0
     data["blood_group"] = normalized_blood_group
     data["component"] = normalized_component
 
@@ -67,8 +67,8 @@ def update_hospital_request_service(hospital_id: str, request_id: str, patch: di
     if data.get("hospital_id") != hospital_id:
         raise HTTPException(status_code=404, detail="HospitalRequest not found")
 
-    patch.pop("requested_ml", None)
-    patch.pop("collected_ml", None)
+    patch.pop("requested_liters", None)
+    patch.pop("collected_liters", None)
 
     doc_ref.update(patch)
 
