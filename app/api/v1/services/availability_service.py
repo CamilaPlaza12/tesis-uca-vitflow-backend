@@ -1,6 +1,11 @@
 from app.schemas.availability_schema import AvailabilityOptions, ALLOWED_WEEKDAYS, ALLOWED_TIMES_LIST, HospitalAvailability
 from app.firebase.firebase_client import db
 
+AVAILABLE_SLOTS_COLL = "available_slots"
+AVAILABILITY_COLL = "hospital_availability"
+
+WEEKDAYS = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"]
+
 def get_availability_options_service() -> AvailabilityOptions:
     return AvailabilityOptions(
         weekdays=ALLOWED_WEEKDAYS,
@@ -21,3 +26,4 @@ def get_hospital_availability_service(hospital_id: str) -> HospitalAvailability:
 
     data = doc.to_dict() or {}
     return HospitalAvailability(**data)
+

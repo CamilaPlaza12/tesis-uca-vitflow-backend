@@ -14,10 +14,12 @@ from app.api.v1.services.appointment_service import (
     create_appointment_manual_service,
     update_appointment_status_service,
     reschedule_appointment_service,
-    apply_completion_side_effects_service,  # ✅ nuevo
+    apply_completion_side_effects_service,
+    reschedule_appointment_with_slots_service
 )
-
+from app.api.v1.services.available_slots_service import release_slot_service
 from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
+
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
@@ -167,6 +169,14 @@ def update_appointment_status_controller(appointment_id: str, body: UpdateAppoin
     if not updated:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
+    # ✅ liberar cupo si se cancela (solo si antes ocupaba cupo)
+    if new_status == "CANCELADO" and current_status in {"PROGRAMADO", "CONFIRMADO"}:
+        date_str = existing.get("date_local")
+        time_str = existing.get("time_local")
+        if date_str and time_str:
+            old_date = datetime.fromisoformat(date_str).date()
+            release_slot_service(hospital_id, old_date, time_str)
+
     # ✅ Efectos automáticos cuando un turno se completa (una sola vez)
     if new_status == "COMPLETADO" and current_status != "COMPLETADO":
         apply_completion_side_effects_service(hospital_id, updated)
@@ -218,7 +228,7 @@ def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppoi
     if new_dt_ba < now_ba:
         raise HTTPException(status_code=400, detail="Rescheduled datetime cannot be in the past")
 
-    updated = reschedule_appointment_service(hospital_id, appointment_id, body)
+    updated = reschedule_appointment_with_slots_service(hospital_id, appointment_id, body)
     if not updated:
         raise HTTPException(status_code=404, detail="Appointment not found")
 

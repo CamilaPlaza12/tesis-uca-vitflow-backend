@@ -1,7 +1,10 @@
+from app.api.v1.services.available_slots_service import reserve_slot_service
 from app.firebase.firebase_client import db
 from app.schemas.appointment_schema import AppointmentCreate, RescheduleAppointmentRequest
 
 from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
+from datetime import datetime
+from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service, build_slot_key
 
 HOSPITAL_REQUESTS_COLLECTION = "hospital_requests"
 DONATION_LITERS_PER_COMPLETED_APPOINTMENT = 0.45  # por ahora fijo
@@ -43,9 +46,13 @@ def get_appointment_by_id_service(hospital_id: str, appointment_id: str):
 def create_appointment_manual_service(hospital_id: str, appointment: AppointmentCreate):
     data = appointment.model_dump()
 
+    # Reservar cupo primero (si falla, no se crea appointment)
+    slot_key = reserve_slot_service(hospital_id, appointment.date_local, appointment.time_local)
+
     data["hospital_id"] = hospital_id
     data["source"] = "HOSPITAL_MANUAL"
     data["status"] = "PROGRAMADO"
+    data["slot_key"] = slot_key
 
     if data.get("date_local") is not None:
         data["date_local"] = data["date_local"].isoformat()
@@ -144,3 +151,57 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
         patch["status"] = "COMPLETO"
 
     db.collection(HOSPITAL_REQUESTS_COLLECTION).document(req_id).update(patch)
+
+def reschedule_appointment_with_slots_service(
+    hospital_id: str,
+    appointment_id: str,
+    body: RescheduleAppointmentRequest,
+):
+    doc_ref = db.collection("appointments").document(appointment_id)
+    snap = doc_ref.get()
+
+    if not snap.exists:
+        return None
+
+    data = snap.to_dict() or {}
+    if data.get("hospital_id") != hospital_id:
+        return None
+
+    old_date_str = data.get("date_local")
+    old_time_str = data.get("time_local")
+
+    if not old_date_str or not old_time_str:
+        raise HTTPException(status_code=409, detail="Appointment has no date/time to reschedule")
+
+    old_date = datetime.fromisoformat(old_date_str).date()
+    new_date = body.date_local
+    new_time = body.time_local
+
+    # 1) reservar cupo en el nuevo slot (si falla, no tocamos nada)
+    new_slot_key = reserve_slot_service(hospital_id, new_date, new_time)
+
+    try:
+        # 2) liberar cupo del slot viejo
+        release_slot_service(hospital_id, old_date, old_time_str)
+
+        # 3) update appointment
+        doc_ref.update({
+            "date_local": new_date.isoformat(),
+            "time_local": new_time,
+            "slot_key": new_slot_key,
+        })
+
+    except Exception:
+        # rollback: devolvemos el cupo del nuevo slot si algo falló después de reservar
+        try:
+            release_slot_service(hospital_id, new_date, new_time)
+        except Exception:
+            pass
+        raise
+
+    data["date_local"] = new_date.isoformat()
+    data["time_local"] = new_time
+    data["slot_key"] = new_slot_key
+    data["id"] = appointment_id
+    return data
+
