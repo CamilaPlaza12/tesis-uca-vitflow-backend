@@ -1,7 +1,7 @@
 from fastapi import HTTPException
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
-from google.cloud import firestore  # ✅ ESTE
+from google.cloud import firestore
 from google.cloud.firestore import Transaction
 
 from app.firebase.firebase_client import db
@@ -12,7 +12,7 @@ AVAILABLE_SLOTS_COLLECTION = "available_slots"
 HOSPITAL_AVAILABILITY_COLLECTION = "hospital_availability"
 
 MIN_TIME = time(7, 0)
-END_EXCLUSIVE = time(20, 0)  # exclusivo => último 19:30
+END_EXCLUSIVE = time(20, 0)
 
 
 def build_slot_key(hospital_id: str, date_local: date, time_local: str) -> str:
@@ -81,7 +81,7 @@ def reserve_slot_service(hospital_id: str, date_local: date, time_local: str) ->
     slot_key = build_slot_key(hospital_id, date_local, time_local)
     slot_ref = db.collection(AVAILABLE_SLOTS_COLLECTION).document(slot_key)
 
-    @firestore.transactional  # ✅ ACÁ
+    @firestore.transactional
     def _tx(tx: Transaction):
         snap = slot_ref.get(transaction=tx)
 
@@ -114,7 +114,7 @@ def release_slot_service(hospital_id: str, date_local: date, time_local: str):
     slot_key = build_slot_key(hospital_id, date_local, time_local)
     slot_ref = db.collection(AVAILABLE_SLOTS_COLLECTION).document(slot_key)
 
-    @firestore.transactional  # ✅ ACÁ
+    @firestore.transactional
     def _tx(tx: Transaction):
         snap = slot_ref.get(transaction=tx)
         if not snap.exists:

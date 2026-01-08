@@ -10,6 +10,8 @@ from app.api.v1.services.hospital_request_service import (
     get_hospital_request_by_id_service,
 )
 
+from app.api.v1.services.appointment_service import cancel_appointments_by_request_service
+
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 VALID_BLOOD_GROUPS = {"O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"}
@@ -53,11 +55,7 @@ def get_hospital_requests_controller(current_user: dict):
     hospital_id = _get_hospital_id(current_user)
     return get_hospital_requests_service(hospital_id)
 
-def update_hospital_request_controller(
-    request_id: str,
-    body: UpdateHospitalRequestRequest,
-    current_user: dict,
-):
+def update_hospital_request_controller(request_id: str, body: UpdateHospitalRequestRequest, current_user: dict):
     hospital_id = _get_hospital_id(current_user)
 
     existing = get_hospital_request_by_id_service(hospital_id, request_id)
@@ -66,28 +64,18 @@ def update_hospital_request_controller(
 
     existing_status = existing.get("status")
 
-    # COMPLETO y CANCELADO: terminal total
     if existing_status in {"COMPLETO", "CANCELADO"}:
-        raise HTTPException(
-            status_code=409,
-            detail="HospitalRequest cannot be edited in terminal status",
-        )
+        raise HTTPException(status_code=409, detail="HospitalRequest cannot be edited in terminal status")
 
     patch = body.model_dump(exclude_unset=True)
 
-    # ✅ FINALIZADO: no se edita manualmente (solo pasa a COMPLETO automáticamente)
     if existing_status == "FINALIZADO":
-        raise HTTPException(
-            status_code=409,
-            detail="FINALIZADO requests cannot be edited (only automatic transition to COMPLETO)",
-        )
+        raise HTTPException(status_code=409, detail="FINALIZADO requests cannot be edited (only automatic transition to COMPLETO)")
 
-    # ✅ COMPLETO es automático: no se setea manual
     if patch.get("status") == "COMPLETO":
-        raise HTTPException(
-            status_code=400,
-            detail="COMPLETO status is automatic and cannot be set manually",
-        )
+        raise HTTPException(status_code=400, detail="COMPLETO status is automatic and cannot be set manually")
+
+    is_cancelling = patch.get("status") == "CANCELADO" and existing_status != "CANCELADO"
 
     if "comments" in patch:
         c = (patch["comments"] or "").strip()
@@ -96,7 +84,13 @@ def update_hospital_request_controller(
     if not patch:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    return update_hospital_request_service(hospital_id, request_id, patch)
+    updated_req = update_hospital_request_service(hospital_id, request_id, patch)
+
+    # NUEVO: side effect
+    if is_cancelling:
+        cancel_appointments_by_request_service(hospital_id, request_id)
+
+    return updated_req
 
 
 def get_hospital_request_by_id_controller(request_id: str, current_user: dict):

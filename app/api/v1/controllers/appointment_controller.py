@@ -13,7 +13,6 @@ from app.api.v1.services.appointment_service import (
     get_appointment_by_id_service,
     create_appointment_manual_service,
     update_appointment_status_service,
-    reschedule_appointment_service,
     apply_completion_side_effects_service,
     reschedule_appointment_with_slots_service
 )
@@ -96,16 +95,10 @@ def create_appointment_manual_controller(appointment: AppointmentCreate, current
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid time_local format")
 
-    if t < MIN_TIME or t > MAX_TIME:
+    if t.minute % 5 != 0:
         raise HTTPException(
             status_code=400,
-            detail=f"time_local must be between {MIN_TIME.strftime('%H:%M')} and {MAX_TIME.strftime('%H:%M')}",
-        )
-
-    if t.minute % 15 != 0:
-        raise HTTPException(
-            status_code=400,
-            detail="time_local must be in 15-minute intervals (00, 15, 30, 45)",
+            detail="time_local must be in 5-minute intervals (00, 05, 10, ..., 55)",
         )
 
     now_ba = datetime.now(BA_TZ)
@@ -169,7 +162,6 @@ def update_appointment_status_controller(appointment_id: str, body: UpdateAppoin
     if not updated:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
-    # ✅ liberar cupo si se cancela (solo si antes ocupaba cupo)
     if new_status == "CANCELADO" and current_status in {"PROGRAMADO", "CONFIRMADO"}:
         date_str = existing.get("date_local")
         time_str = existing.get("time_local")
@@ -177,7 +169,6 @@ def update_appointment_status_controller(appointment_id: str, body: UpdateAppoin
             old_date = datetime.fromisoformat(date_str).date()
             release_slot_service(hospital_id, old_date, time_str)
 
-    # ✅ Efectos automáticos cuando un turno se completa (una sola vez)
     if new_status == "COMPLETADO" and current_status != "COMPLETADO":
         apply_completion_side_effects_service(hospital_id, updated)
 
@@ -211,16 +202,10 @@ def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppoi
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid time_local format")
 
-    if t < MIN_TIME or t > MAX_TIME:
+    if t.minute % 5 != 0:
         raise HTTPException(
             status_code=400,
-            detail=f"time_local must be between {MIN_TIME.strftime('%H:%M')} and {MAX_TIME.strftime('%H:%M')}",
-        )
-
-    if t.minute % 15 != 0:
-        raise HTTPException(
-            status_code=400,
-            detail="time_local must be in 15-minute intervals (00, 15, 30, 45)",
+            detail="time_local must be in 5-minute intervals (00, 05, 10, ..., 55)",
         )
 
     now_ba = datetime.now(BA_TZ)

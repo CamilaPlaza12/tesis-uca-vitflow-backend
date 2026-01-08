@@ -7,7 +7,7 @@ from datetime import datetime
 from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service, build_slot_key
 
 HOSPITAL_REQUESTS_COLLECTION = "hospital_requests"
-DONATION_LITERS_PER_COMPLETED_APPOINTMENT = 0.45  # por ahora fijo
+DONATION_LITERS_PER_COMPLETED_APPOINTMENT = 0.45
 
 
 def get_appointments_service(hospital_id: str):
@@ -46,7 +46,6 @@ def get_appointment_by_id_service(hospital_id: str, appointment_id: str):
 def create_appointment_manual_service(hospital_id: str, appointment: AppointmentCreate):
     data = appointment.model_dump()
 
-    # Reservar cupo primero (si falla, no se crea appointment)
     slot_key = reserve_slot_service(hospital_id, appointment.date_local, appointment.time_local)
 
     data["hospital_id"] = hospital_id
@@ -122,17 +121,14 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
     if not req_id:
         return
 
-    # ✅ valida existencia + ownership por hospital
     hospital_request = get_hospital_request_by_id_service(hospital_id, req_id)
     if not hospital_request:
         return
 
     req_status = hospital_request.get("status")
     if req_status not in {"ACTIVO", "FINALIZADO"}:
-        # si está CANCELADO o COMPLETO, no tocamos
         return
 
-    # Vos dijiste: campos se llaman *_ml pero los están usando como litros por ahora
     collected = float(hospital_request.get("collected_liters", 0) or 0)
     requested = float(hospital_request.get("requested_liters", 0) or 0)
 
@@ -140,7 +136,6 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
 
     new_collected = collected + DONATION_LITERS_PER_COMPLETED_APPOINTMENT
 
-    # para evitar floats feos tipo 1.90000000004
     new_collected = round(new_collected, 4)
 
     print("Applying completion side effects: new_collected =", new_collected)
@@ -177,7 +172,6 @@ def reschedule_appointment_with_slots_service(
     new_date = body.date_local
     new_time = body.time_local
 
-    # 1) reservar cupo en el nuevo slot (si falla, no tocamos nada)
     new_slot_key = reserve_slot_service(hospital_id, new_date, new_time)
 
     try:
@@ -192,7 +186,6 @@ def reschedule_appointment_with_slots_service(
         })
 
     except Exception:
-        # rollback: devolvemos el cupo del nuevo slot si algo falló después de reservar
         try:
             release_slot_service(hospital_id, new_date, new_time)
         except Exception:
@@ -204,4 +197,44 @@ def reschedule_appointment_with_slots_service(
     data["slot_key"] = new_slot_key
     data["id"] = appointment_id
     return data
+
+
+def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id: str) -> int:
+    """
+    Cancela todos los appointments activos (PROGRAMADO/CONFIRMADO) asociados al pedido.
+    Libera el cupo del slot si corresponde.
+    Devuelve cantidad cancelada.
+    """
+    # Traemos appointments del hospital por request_id
+    docs = (
+        db.collection("appointments")
+        .where("hospital_id", "==", hospital_id)
+        .where("hospital_request_id", "==", hospital_request_id)
+        .stream()
+    )
+
+    cancelled = 0
+
+    for snap in docs:
+        appt = snap.to_dict() or {}
+        appt_status = appt.get("status")
+
+        if appt_status not in {"PROGRAMADO", "CONFIRMADO"}:
+            continue
+
+        date_str = appt.get("date_local")
+        time_str = appt.get("time_local")
+
+        if date_str and time_str:
+            try:
+                old_date = datetime.fromisoformat(date_str).date()
+                release_slot_service(hospital_id, old_date, time_str)
+            except Exception:
+                raise HTTPException(status_code=409, detail="Failed to release slot for an appointment")
+
+        # Update status
+        snap.reference.update({"status": "CANCELADO"})
+        cancelled += 1
+
+    return cancelled
 
