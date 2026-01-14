@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field, EmailStr, model_validator
+from pydantic import ConfigDict
 from typing import Literal, Optional, List
 
 BloodGroup = Literal[
@@ -11,10 +12,14 @@ BloodGroup = Literal[
 Gender = Literal["F", "M", "OTHER"]
 
 class GeoPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     lat: float = Field(..., ge=-90, le=90)
     lng: float = Field(..., ge=-180, le=180)
 
 class DonorCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     first_name: str = Field(..., min_length=1, max_length=50)
     last_name: str = Field(..., min_length=1, max_length=50)
     dni: str = Field(..., min_length=6, max_length=15)
@@ -23,7 +28,10 @@ class DonorCreate(BaseModel):
     phone_number: str = Field(..., min_length=6, max_length=20, pattern=r"^\+?[0-9\s\-()]{6,20}$")
 
     gender: Gender
-    is_pregnant: Optional[bool] = Field(..., description="Only applicable if gender is 'F'. Must be null otherwise.")
+    is_pregnant: Optional[bool] = Field(
+        ...,
+        description="Only applicable if gender is 'F'. Must be null otherwise."
+    )
     medications: Optional[List[str]] = None
 
     birth_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
@@ -36,9 +44,6 @@ class DonorCreate(BaseModel):
 
     address_text: str = Field(..., min_length=5, max_length=180)
 
-    # ✅ ahora lo completa el backend (si viene, también lo aceptamos)
-    geo: Optional[GeoPoint] = None
-
     is_subscribed: bool = True
     has_consent: bool = True
 
@@ -49,7 +54,10 @@ class DonorCreate(BaseModel):
         return self
 
 class Donor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
+
     first_name: str
     last_name: str
     dni: str
@@ -62,6 +70,8 @@ class Donor(BaseModel):
     medications: Optional[List[str]]
 
     birth_date: str
+    age_years: int
+
     weight_kg: float
     blood_group: BloodGroup
 
@@ -69,18 +79,17 @@ class Donor(BaseModel):
     last_donation_date: Optional[str]
 
     address_text: str
-    geo: GeoPoint  # ✅ en response debería existir
+    geo: GeoPoint
 
     is_subscribed: bool
     has_consent: bool
 
-    created_at_local: str
-    updated_at_local: Optional[str] = None
-
 class DonorUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     weight_kg: Optional[float] = Field(None, gt=0, le=300)
     has_recent_tattoo: Optional[bool] = None
     last_donation_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
+    # Corrige domicilio (y el backend recalcula geo)
     address_text: Optional[str] = Field(None, min_length=5, max_length=180)
-    geo: Optional[GeoPoint] = None
