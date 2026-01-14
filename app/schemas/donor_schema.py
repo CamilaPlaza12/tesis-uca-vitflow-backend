@@ -54,7 +54,6 @@ class DonorCreate(BaseModel):
         return self
 
 class Donor(BaseModel):
-    model_config = ConfigDict(extra="forbid")
 
     id: str
 
@@ -85,7 +84,6 @@ class Donor(BaseModel):
     has_consent: bool
 
 class DonorUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
 
     weight_kg: Optional[float] = Field(None, gt=0, le=300)
     has_recent_tattoo: Optional[bool] = None
