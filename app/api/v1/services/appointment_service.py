@@ -4,7 +4,9 @@ from app.schemas.appointment_schema import AppointmentCreate, RescheduleAppointm
 
 from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
 from datetime import datetime
-from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service, build_slot_key
+from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service,build_slot_key
+from app.api.v1.services.blood_bank_service import add_blood_ml_by_group_service
+
 
 HOSPITAL_REQUESTS_COLLECTION = "hospital_requests"
 DONATION_LITERS_PER_COMPLETED_APPOINTMENT = 0.45
@@ -124,6 +126,10 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
     hospital_request = get_hospital_request_by_id_service(hospital_id, req_id)
     if not hospital_request:
         return
+    
+    blood_group = (hospital_request.get("blood_group") or "").strip().upper()
+    if blood_group:
+        add_blood_ml_by_group_service(hospital_id, blood_group, 450)
 
     req_status = hospital_request.get("status")
     if req_status not in {"ACTIVO", "FINALIZADO"}:

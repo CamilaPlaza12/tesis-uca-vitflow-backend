@@ -20,7 +20,7 @@ def build_slot_key(hospital_id: str, date_local: date, time_local: str) -> str:
 
 
 def weekday_str(d: date) -> str:
-    mapping = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO", "DOMINGO"]
+    mapping = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
     return mapping[d.weekday()]
 
 
@@ -39,16 +39,9 @@ def validate_time_rules(t: time):
             detail=f"time_local must be between {MIN_TIME.strftime('%H:%M')} and 19:30",
         )
 
-    if t.minute not in (0, 30):
-        raise HTTPException(
-            status_code=400,
-            detail="time_local must be in 30-minute intervals (00, 30)",
-        )
-
-
 def get_capacity_from_availability(hospital_id: str, date_local: date, time_local: str) -> int:
     day = weekday_str(date_local)
-    if day == "DOMINGO":
+    if day == "Domingo":
         raise HTTPException(status_code=400, detail="No se pueden crear turnos los domingos")
 
     avail_ref = db.collection(HOSPITAL_AVAILABILITY_COLLECTION).document(hospital_id)
@@ -57,19 +50,31 @@ def get_capacity_from_availability(hospital_id: str, date_local: date, time_loca
         raise HTTPException(status_code=409, detail="El hospital no configuró su disponibilidad")
 
     data = snap.to_dict() or {}
-    weekly = data.get("weekly") or {}
+    days = data.get("days") or []
 
-    day_map = weekly.get(day) or {}
-    cap = day_map.get(time_local)
+    # buscar el día
+    day_obj = next((d for d in days if d.get("day") == day), None)
+    if not day_obj:
+        raise HTTPException(status_code=409, detail=f"El hospital no tiene habilitado {day}")
 
-    if cap is None:
-        raise HTTPException(status_code=409, detail=f"El hospital no tiene habilitado {day} {time_local}")
+    if not day_obj.get("enabled", False):
+        raise HTTPException(status_code=409, detail=f"El hospital no tiene habilitado {day}")
 
-    cap = int(cap)
-    if cap < 1:
+    # buscar el horario
+    slots = day_obj.get("timeSlots") or []
+    slot = next((s for s in slots if s.get("time") == time_local), None)
+    if not slot:
+        raise HTTPException(
+            status_code=409,
+            detail=f"El hospital no tiene habilitado {day} {time_local}",
+        )
+
+    capacity = int(slot.get("capacity", 0))
+    if capacity < 1:
         raise HTTPException(status_code=409, detail="Invalid capacity for selected slot")
 
-    return cap
+    return capacity
+
 
 
 def reserve_slot_service(hospital_id: str, date_local: date, time_local: str) -> str:
@@ -123,11 +128,16 @@ def release_slot_service(hospital_id: str, date_local: date, time_local: str):
         doc = snap.to_dict() or {}
         used = int(doc.get("used", 0))
 
-        if used <= 0:
-            tx.update(slot_ref, {"used": 0})
+        new_used = used - 1
+
+        # ✅ si queda 0 o menos, borramos el doc
+        if new_used <= 0:
+            tx.delete(slot_ref)
             return
 
-        tx.update(slot_ref, {"used": used - 1})
-
+        tx.update(slot_ref, {"used": new_used})
+        
     tx = db.transaction()
     _tx(tx)
+
+

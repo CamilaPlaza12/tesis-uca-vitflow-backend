@@ -1,6 +1,10 @@
 from app.firebase.firebase_client import db
 from app.schemas.hospital_request_schema import HospitalRequestCreate
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+
 COLLECTION = "hospital_requests"
 
 def create_hospital_request_service(
@@ -75,4 +79,52 @@ def update_hospital_request_service(hospital_id: str, request_id: str, patch: di
     updated = {**data, **patch}
     updated["id"] = request_id
     return updated
+
+
+def find_active_auto_request_by_blood_group_service(hospital_id: str, blood_group: str):
+    docs = (
+        db.collection(COLLECTION)
+        .where("hospital_id", "==", hospital_id)
+        .where("status", "==", "ACTIVO")
+        .where("blood_group", "==", blood_group)
+        .where("requested_by", "==", "Sistema")
+        .limit(1)
+        .stream()
+    )
+
+    for doc in docs:
+        data = doc.to_dict() or {}
+        data["id"] = doc.id
+        return data
+
+    return None
+
+BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
+
+def create_auto_low_stock_request_service(hospital_id: str, blood_group: str, requested_liters: float = 1.0):
+    """
+    Crea pedido automático por bajo stock.
+    requested_by = "Sistema" (clave anti-duplicado)
+    priority = "URGENTE"
+    """
+    now_iso = datetime.now(BA_TZ).isoformat()
+
+    data = {
+        "hospital_id": hospital_id,
+        "datetime_local": now_iso,
+        "hospital_unit": "Guardia",      # obligatorio por tu schema
+        "component": "SANGRE",           # no importa para la lógica, dejalo fijo
+        "blood_group": blood_group,
+        "requested_liters": float(requested_liters),
+        "collected_liters": 0,
+        "priority": "URGENTE",
+        "status": "ACTIVO",
+        "requested_by": "Sistema",
+        "comments": "Pedido automático por bajo stock",
+    }
+
+    res = db.collection(COLLECTION).add(data)
+    doc_ref = res[1] if isinstance(res, (list, tuple)) and len(res) == 2 else res
+    return {"id": doc_ref.id, **data}
+
 

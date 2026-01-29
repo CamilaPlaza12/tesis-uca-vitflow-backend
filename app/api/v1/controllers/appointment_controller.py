@@ -18,6 +18,7 @@ from app.api.v1.services.appointment_service import (
 )
 from app.api.v1.services.available_slots_service import release_slot_service
 from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
+from app.api.v1.services.blood_bank_service import add_blood_ml_by_group_service
 
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
@@ -170,7 +171,17 @@ def update_appointment_status_controller(appointment_id: str, body: UpdateAppoin
             release_slot_service(hospital_id, old_date, time_str)
 
     if new_status == "COMPLETADO" and current_status != "COMPLETADO":
+    # 1) side effects existentes (collected_liters + autocompletar request)
         apply_completion_side_effects_service(hospital_id, updated)
+        # 2) sumar 450ml al banco de sangre según el blood_group del pedido asociado
+        req_id = (updated.get("hospital_request_id") or "").strip()
+        if req_id:
+            req = get_hospital_request_by_id_service(hospital_id, req_id)
+            if req:
+                bg = (req.get("blood_group") or "").strip()
+                if bg:
+                    add_blood_ml_by_group_service(hospital_id, bg, 450)
+
 
     return updated
 
