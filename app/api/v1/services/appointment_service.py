@@ -7,6 +7,8 @@ from datetime import datetime
 from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service,build_slot_key
 from app.api.v1.services.blood_bank_service import add_blood_ml_by_group_service
 
+from datetime import datetime, date 
+
 
 HOSPITAL_REQUESTS_COLLECTION = "hospital_requests"
 DONATION_LITERS_PER_COMPLETED_APPOINTMENT = 0.45
@@ -244,3 +246,24 @@ def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id
 
     return cancelled
 
+def search_appointments_by_range_service(hospital_id: str, desde: date, hasta: date):
+    desde_str = desde.isoformat()
+    hasta_str = hasta.isoformat()
+
+    q = (
+        db.collection("appointments")
+        .where("hospital_id", "==", hospital_id)
+        .where("date_local", ">=", desde_str)
+        .where("date_local", "<=", hasta_str)
+        .order_by("date_local")
+    )
+
+    docs = q.stream()
+
+    results = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        data["id"] = doc.id
+        results.append(data)
+
+    return results

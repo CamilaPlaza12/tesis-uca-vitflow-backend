@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status
-from datetime import datetime, time
+from datetime import datetime, time, date
 from zoneinfo import ZoneInfo
 
 from app.schemas.appointment_schema import (
@@ -12,14 +12,14 @@ from app.api.v1.services.appointment_service import (
     get_appointments_service,
     get_appointment_by_id_service,
     create_appointment_manual_service,
+    search_appointments_by_range_service,
     update_appointment_status_service,
     apply_completion_side_effects_service,
-    reschedule_appointment_with_slots_service
+    reschedule_appointment_with_slots_service,
 )
 from app.api.v1.services.available_slots_service import release_slot_service
 from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
 from app.api.v1.services.blood_bank_service import add_blood_ml_by_group_service
-
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
@@ -229,3 +229,64 @@ def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppoi
         raise HTTPException(status_code=404, detail="Appointment not found")
 
     return updated
+
+
+MAX_RANGE_DAYS = 366  # ✅ 1 año (cubriendo bisiesto)
+
+
+def search_appointments_by_range_controller(desde: date, hasta: date, current_user: dict):
+    hospital_id = current_user.get("uid") if current_user else None
+    if not hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token: missing uid",
+        )
+
+    if desde > hasta:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid range: desde cannot be after hasta",
+        )
+
+    if (hasta - desde).days > MAX_RANGE_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid range: date range cannot exceed 1 year",
+        )
+
+    return search_appointments_by_range_service(hospital_id, desde, hasta)
+
+def _first_day_of_month(d: date) -> date:
+    return date(d.year, d.month, 1)
+
+
+def _add_months(d: date, months: int) -> date:
+    # mueve meses manteniendo "día 1" seguro
+    y = d.year + (d.month - 1 + months) // 12
+    m = (d.month - 1 + months) % 12 + 1
+    return date(y, m, 1)
+
+
+def _last_day_of_month(d: date) -> date:
+    # d debe ser primer día del mes
+    next_month_first = _add_months(d, 1)
+    return next_month_first.fromordinal(next_month_first.toordinal() - 1)
+
+
+def get_month_window_appointments_controller(current_user: dict):
+    hospital_id = current_user.get("uid") if current_user else None
+    if not hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token: missing uid",
+        )
+
+    today_ba = datetime.now(BA_TZ).date()
+    current_month_first = _first_day_of_month(today_ba)
+
+    desde = _add_months(current_month_first, -1)              # mes anterior (1er día)
+    end_month_first = _add_months(current_month_first, 2)     # primer día del mes +2
+    hasta = _last_day_of_month(end_month_first)               # último día del mes +2
+
+    return search_appointments_by_range_service(hospital_id, desde, hasta)
+
