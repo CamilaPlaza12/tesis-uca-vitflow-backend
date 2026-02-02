@@ -7,6 +7,9 @@ from datetime import datetime
 from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service,build_slot_key
 from app.api.v1.services.blood_bank_service import add_blood_ml_by_group_service
 
+from app.api.v1.services.blood_bank_service import ensure_auto_request_if_low_service
+
+
 from datetime import datetime, date 
 
 
@@ -118,8 +121,11 @@ def reschedule_appointment_service(
 def apply_completion_side_effects_service(hospital_id: str, appointment_data: dict):
     """
     Se llama SOLO cuando un turno transiciona a COMPLETADO por primera vez.
-    - Suma 0.45 L al pedido asociado (por ahora fijo)
-    - Si alcanza/supera requested => status del pedido pasa a COMPLETO automáticamente
+    - Suma 0.45 L al banco de sangre
+    - Actualiza collected_liters del pedido
+    - Si alcanza requested_liters => pedido pasa a COMPLETO
+    - Si el pedido era automático (Sistema), re-chequea stock post-cierre
+      y crea nuevo pedido automático si sigue bajo el umbral
     """
     req_id = (appointment_data.get("hospital_request_id") or "").strip()
     if not req_id:
@@ -128,10 +134,13 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
     hospital_request = get_hospital_request_by_id_service(hospital_id, req_id)
     if not hospital_request:
         return
-    
+
     blood_group = (hospital_request.get("blood_group") or "").strip().upper()
-    if blood_group:
-        add_blood_ml_by_group_service(hospital_id, blood_group, 450)
+    if not blood_group:
+        return
+
+    # 1️⃣ Sumar sangre al banco (esto ya dispara chequeo normal de stock)
+    add_blood_ml_by_group_service(hospital_id, blood_group, 450)
 
     req_status = hospital_request.get("status")
     if req_status not in {"ACTIVO", "FINALIZADO"}:
@@ -140,20 +149,20 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
     collected = float(hospital_request.get("collected_liters", 0) or 0)
     requested = float(hospital_request.get("requested_liters", 0) or 0)
 
-    print("Applying completion side effects: requested =", requested)
-
-    new_collected = collected + DONATION_LITERS_PER_COMPLETED_APPOINTMENT
-
-    new_collected = round(new_collected, 4)
-
-    print("Applying completion side effects: new_collected =", new_collected)
+    new_collected = round(collected + DONATION_LITERS_PER_COMPLETED_APPOINTMENT, 4)
 
     patch = {"collected_liters": new_collected}
 
+    completed_now = False
     if requested > 0 and new_collected >= requested:
         patch["status"] = "COMPLETO"
+        completed_now = True
 
     db.collection(HOSPITAL_REQUESTS_COLLECTION).document(req_id).update(patch)
+
+    # 2️⃣ 🔁 Re-chequeo post-cierre SOLO si era pedido automático
+    if completed_now and hospital_request.get("requested_by") == "Sistema":
+        ensure_auto_request_if_low_service(hospital_id, blood_group)
 
 def reschedule_appointment_with_slots_service(
     hospital_id: str,
