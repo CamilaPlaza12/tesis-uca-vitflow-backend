@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import PROJECT_NAME, API_V1_PREFIX
-from app.api.v1.routers import auth_router, appointment_router, availability_router, blood_bank_router, user_router, hospital_request_router, donor_router
+from app.api.v1.routers import auth_router, appointment_router, availability_router, blood_bank_router, emails_router, hospital_onboarding_router, user_router, hospital_request_router, donor_router
 from app.firebase import firebase_client
 
 app = FastAPI(title=PROJECT_NAME)
@@ -30,5 +30,7 @@ app.include_router(hospital_request_router.router, prefix=API_V1_PREFIX)
 app.include_router(availability_router.router, prefix=API_V1_PREFIX)
 app.include_router(donor_router.router, prefix=API_V1_PREFIX)
 app.include_router(blood_bank_router.router, prefix=API_V1_PREFIX)
+app.include_router(hospital_onboarding_router.router, prefix=API_V1_PREFIX)
+
 
 
