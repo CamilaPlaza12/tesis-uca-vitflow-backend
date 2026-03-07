@@ -8,6 +8,10 @@ from app.api.v1.services.donor_service import (
     create_donor_service,
     update_donor_service,
 )
+from app.api.v1.services.donor_eligibility_service import (
+    evaluate_donor_eligibility_service,
+)
+
 
 def _require_auth(current_user: dict):
     uid = current_user.get("uid") if current_user else None
@@ -16,6 +20,7 @@ def _require_auth(current_user: dict):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token: missing uid",
         )
+
 
 def create_donor_controller(body: DonorCreate, current_user: dict):
     _require_auth(current_user)
@@ -30,6 +35,7 @@ def create_donor_controller(body: DonorCreate, current_user: dict):
 
     return res
 
+
 def get_donor_by_id_controller(donor_id: str, current_user: dict):
     _require_auth(current_user)
 
@@ -37,6 +43,7 @@ def get_donor_by_id_controller(donor_id: str, current_user: dict):
     if not donor:
         raise HTTPException(status_code=404, detail="Donor not found")
     return donor
+
 
 def get_donor_by_dni_controller(dni: str, current_user: dict):
     _require_auth(current_user)
@@ -50,9 +57,11 @@ def get_donor_by_dni_controller(dni: str, current_user: dict):
         raise HTTPException(status_code=404, detail="Donor not found")
     return donor
 
+
 def get_all_donors_controller(current_user: dict):
     _require_auth(current_user)
     return get_all_donors_service()
+
 
 def get_donors_by_blood_group_controller(blood_group: str, current_user: dict):
     _require_auth(current_user)
@@ -62,6 +71,7 @@ def get_donors_by_blood_group_controller(blood_group: str, current_user: dict):
         raise HTTPException(status_code=400, detail="Invalid blood group")
 
     return get_donors_by_blood_group_service(blood_group)
+
 
 def update_donor_controller(donor_id: str, body: DonorUpdate, current_user: dict):
     _require_auth(current_user)
@@ -79,3 +89,13 @@ def update_donor_controller(donor_id: str, body: DonorUpdate, current_user: dict
         raise HTTPException(status_code=422, detail="Could not geocode address_text")
 
     return updated
+
+
+def evaluate_donor_eligibility_controller(donor_id: str, current_user: dict):
+    _require_auth(current_user)
+
+    result = evaluate_donor_eligibility_service(donor_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Donor not found")
+
+    return result
