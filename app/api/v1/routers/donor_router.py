@@ -9,9 +9,11 @@ from app.api.v1.controllers.donor_controller import (
     update_donor_controller,
     get_all_donors_controller,
     get_donors_by_blood_group_controller,
+    evaluate_donor_eligibility_controller,
 )
 
 router = APIRouter(prefix="/donors", tags=["Donors"])
+
 
 @router.post("/")
 async def create_donor_endpoint(
@@ -20,6 +22,7 @@ async def create_donor_endpoint(
 ):
     return create_donor_controller(body, current_user)
 
+
 @router.get("/by-dni/{dni}")
 async def get_donor_by_dni_endpoint(
     dni: str,
@@ -27,11 +30,28 @@ async def get_donor_by_dni_endpoint(
 ):
     return get_donor_by_dni_controller(dni, current_user)
 
+
 @router.get("/")
 async def get_all_donors_endpoint(
     current_user: dict = Depends(get_current_user),
 ):
     return get_all_donors_controller(current_user)
+
+
+@router.get("/by-blood-group/{blood_group}")
+async def get_donors_by_blood_group_endpoint(
+    blood_group: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_donors_by_blood_group_controller(blood_group, current_user)
+
+
+@router.post("/{donor_id}/evaluate-eligibility")
+async def evaluate_donor_eligibility_endpoint(
+    donor_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return evaluate_donor_eligibility_controller(donor_id, current_user)
 
 
 @router.get("/{donor_id}")
@@ -41,6 +61,7 @@ async def get_donor_by_id_endpoint(
 ):
     return get_donor_by_id_controller(donor_id, current_user)
 
+
 @router.patch("/{donor_id}")
 async def update_donor_endpoint(
     donor_id: str,
@@ -48,11 +69,3 @@ async def update_donor_endpoint(
     current_user: dict = Depends(get_current_user),
 ):
     return update_donor_controller(donor_id, body, current_user)
-
-
-@router.get("/by-blood-group/{blood_group}")
-async def get_donors_by_blood_group_endpoint(
-    blood_group: str,
-    current_user: dict = Depends(get_current_user),
-):
-    return get_donors_by_blood_group_controller(blood_group, current_user)

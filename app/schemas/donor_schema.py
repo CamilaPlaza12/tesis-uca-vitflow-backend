@@ -10,12 +10,15 @@ BloodGroup = Literal[
 ]
 
 Gender = Literal["F", "M", "OTHER"]
+EligibilityStatus = Literal["APT", "WAIT", "NOT_APT"]
+
 
 class GeoPoint(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     lat: float = Field(..., ge=-90, le=90)
     lng: float = Field(..., ge=-180, le=180)
+
 
 class DonorCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -47,14 +50,17 @@ class DonorCreate(BaseModel):
     is_subscribed: bool = True
     has_consent: bool = True
 
+    has_fever_or_infection: bool = False
+    screening_updated_at: Optional[str] = None
+
     @model_validator(mode="after")
     def validate_pregnancy_consistency(self):
         if self.gender != "F" and self.is_pregnant is not None:
             raise ValueError("is_pregnant must be null unless gender is 'F'")
         return self
 
-class Donor(BaseModel):
 
+class Donor(BaseModel):
     id: str
 
     first_name: str
@@ -83,11 +89,22 @@ class Donor(BaseModel):
     is_subscribed: bool
     has_consent: bool
 
-class DonorUpdate(BaseModel):
+    has_fever_or_infection: bool = False
+    screening_updated_at: Optional[str] = None
 
+    eligibility_status: Optional[EligibilityStatus] = None
+    eligibility_available_from: Optional[str] = None
+    eligibility_checked_at: Optional[str] = None
+    eligibility_reasons: Optional[List[str]] = None
+
+
+class DonorUpdate(BaseModel):
     weight_kg: Optional[float] = Field(None, gt=0, le=300)
     has_recent_tattoo: Optional[bool] = None
     last_donation_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
-
-    # Corrige domicilio (y el backend recalcula geo)
     address_text: Optional[str] = Field(None, min_length=5, max_length=180)
+
+    is_pregnant: Optional[bool] = None
+    medications: Optional[List[str]] = None
+    has_fever_or_infection: Optional[bool] = None
+    screening_updated_at: Optional[str] = None
