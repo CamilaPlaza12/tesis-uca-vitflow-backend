@@ -1,23 +1,32 @@
+import os
 import requests
 from typing import Optional, Dict
 
-NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+GOOGLE_GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
+API_KEY = os.getenv("GOOGLE_GEOCODING_API_KEY")
 
-def geocode_address_nominatim(address_text: str) -> Optional[Dict[str, float]]:
+
+def geocode_address_google(address_text: str) -> Optional[Dict[str, float]]:
     params = {
-        "q": f"{address_text}, Argentina",
-        "format": "json",
-        "limit": 1
+        "address": f"{address_text}, Argentina",
+        "key": API_KEY,
+        "region": "ar",
     }
+
     headers = {
         "User-Agent": "vitflow/1.0"
     }
 
-    r = requests.get(NOMINATIM_URL, params=params, headers=headers, timeout=10)
+    r = requests.get(GOOGLE_GEOCODE_URL, params=params, headers=headers, timeout=10)
     r.raise_for_status()
     data = r.json()
 
-    if not data:
+    if data.get("status") != "OK":
         return None
 
-    return {"lat": float(data[0]["lat"]), "lng": float(data[0]["lon"])}
+    location = data["results"][0]["geometry"]["location"]
+
+    return {
+        "lat": float(location["lat"]),
+        "lng": float(location["lng"]),
+    }

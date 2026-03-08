@@ -1,7 +1,7 @@
 from datetime import date
 from app.firebase.firebase_client import db
 from app.schemas.donor_schema import DonorCreate
-from app.utils.geocoding import geocode_address_nominatim
+from app.utils.geocoding import geocode_address_google
 from app.utils.age import compute_age_years
 
 COLLECTION = "donors"
@@ -91,7 +91,7 @@ def create_donor_service(body: DonorCreate):
         return {"_error": "DNI_ALREADY_EXISTS", "existing_id": existing["id"]}
 
     data = body.model_dump()
-    geo = geocode_address_nominatim(data["address_text"])
+    geo = geocode_address_google(data["address_text"])
     if geo is None:
         return {"_error": "GEOCODE_FAILED"}
 
@@ -118,7 +118,7 @@ def update_donor_service(donor_id: str, patch: dict):
     existing = snap.to_dict() or {}
 
     if "address_text" in patch:
-        geo = geocode_address_nominatim(patch["address_text"])
+        geo = geocode_address_google(patch["address_text"])
         if geo is None:
             return {"_error": "GEOCODE_FAILED"}
         patch["geo"] = geo
