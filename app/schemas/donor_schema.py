@@ -20,6 +20,17 @@ class GeoPoint(BaseModel):
     lng: float = Field(..., ge=-180, le=180)
 
 
+class AddressValidationIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    address_text: str = Field(..., min_length=5, max_length=180)
+
+
+class AddressValidationOut(BaseModel):
+    ok: bool
+    address_text: str
+    geo: Optional[GeoPoint] = None
+
+
 class DonorCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

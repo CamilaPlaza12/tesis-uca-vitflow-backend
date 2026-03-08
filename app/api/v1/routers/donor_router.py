@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends
 
 from app.core.security import get_current_user
-from app.schemas.donor_schema import DonorCreate, DonorUpdate
+from app.schemas.donor_schema import DonorCreate, DonorUpdate, AddressValidationIn
 from app.api.v1.controllers.donor_controller import (
+    validate_address_controller,
     create_donor_controller,
     get_donor_by_id_controller,
     get_donor_by_dni_controller,
@@ -13,6 +14,14 @@ from app.api.v1.controllers.donor_controller import (
 )
 
 router = APIRouter(prefix="/donors", tags=["Donors"])
+
+
+@router.post("/validate-address")
+async def validate_address_endpoint(
+    body: AddressValidationIn,
+    current_user: dict = Depends(get_current_user),
+):
+    return validate_address_controller(body, current_user)
 
 
 @router.post("/")
