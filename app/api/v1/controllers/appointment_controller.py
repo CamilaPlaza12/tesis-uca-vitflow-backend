@@ -19,7 +19,8 @@ from app.api.v1.services.appointment_service import (
 )
 from app.api.v1.services.available_slots_service import release_slot_service
 from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
-from app.api.v1.services.blood_bank_service import add_blood_ml_by_group_service
+
+from app.utils.auth_utils import resolve_hospital_id
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
@@ -28,23 +29,15 @@ MAX_TIME = time(20, 0)
 
 
 def get_appointments_controller(current_user: dict):
-    hospital_id = current_user.get("uid")
-    if not hospital_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid",
-        )
+    hospital_id = resolve_hospital_id(current_user)
     return get_appointments_service(hospital_id)
 
 
 def get_appointment_by_id_controller(appointment_id: str, current_user: dict):
-    hospital_id = current_user.get("uid") if current_user else None
-    if not hospital_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid",
-        )
-
+    hospital_id = resolve_hospital_id(current_user)
+    print("=== get_appointment_by_id_controller ===")
+    print("hospital_id resuelto:", hospital_id)
+    print("appointment_id:", repr(appointment_id))
     if not appointment_id or not appointment_id.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -62,12 +55,7 @@ def get_appointment_by_id_controller(appointment_id: str, current_user: dict):
 
 
 def create_appointment_manual_controller(appointment: AppointmentCreate, current_user: dict):
-    hospital_id = current_user.get("uid") if current_user else None
-    if not hospital_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid",
-        )
+    hospital_id = resolve_hospital_id(current_user)
 
     req_id = appointment.hospital_request_id.strip()
     if not req_id:
@@ -134,12 +122,7 @@ def _validate_status_transition(current_status: str, new_status: str):
 
 
 def update_appointment_status_controller(appointment_id: str, body: UpdateAppointmentStatusRequest, current_user: dict):
-    hospital_id = current_user.get("uid") if current_user else None
-    if not hospital_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid",
-        )
+    hospital_id = resolve_hospital_id(current_user)
 
     if not appointment_id or not appointment_id.strip():
         raise HTTPException(status_code=400, detail="appointment_id is required")
@@ -171,28 +154,13 @@ def update_appointment_status_controller(appointment_id: str, body: UpdateAppoin
             release_slot_service(hospital_id, old_date, time_str)
 
     if new_status == "COMPLETADO" and current_status != "COMPLETADO":
-    # 1) side effects existentes (collected_liters + autocompletar request)
         apply_completion_side_effects_service(hospital_id, updated)
-        # 2) sumar 450ml al banco de sangre según el blood_group del pedido asociado
-        req_id = (updated.get("hospital_request_id") or "").strip()
-        if req_id:
-            req = get_hospital_request_by_id_service(hospital_id, req_id)
-            if req:
-                bg = (req.get("blood_group") or "").strip()
-                if bg:
-                    add_blood_ml_by_group_service(hospital_id, bg, 450)
-
 
     return updated
 
 
 def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppointmentRequest, current_user: dict):
-    hospital_id = current_user.get("uid") if current_user else None
-    if not hospital_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid",
-        )
+    hospital_id = resolve_hospital_id(current_user)
 
     if not appointment_id or not appointment_id.strip():
         raise HTTPException(status_code=400, detail="appointment_id is required")
@@ -231,16 +199,11 @@ def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppoi
     return updated
 
 
-MAX_RANGE_DAYS = 366  # ✅ 1 año (cubriendo bisiesto)
+MAX_RANGE_DAYS = 366
 
 
 def search_appointments_by_range_controller(desde: date, hasta: date, current_user: dict):
-    hospital_id = current_user.get("uid") if current_user else None
-    if not hospital_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid",
-        )
+    hospital_id = resolve_hospital_id(current_user)
 
     if desde > hasta:
         raise HTTPException(
@@ -256,37 +219,30 @@ def search_appointments_by_range_controller(desde: date, hasta: date, current_us
 
     return search_appointments_by_range_service(hospital_id, desde, hasta)
 
+
 def _first_day_of_month(d: date) -> date:
     return date(d.year, d.month, 1)
 
 
 def _add_months(d: date, months: int) -> date:
-    # mueve meses manteniendo "día 1" seguro
     y = d.year + (d.month - 1 + months) // 12
     m = (d.month - 1 + months) % 12 + 1
     return date(y, m, 1)
 
 
 def _last_day_of_month(d: date) -> date:
-    # d debe ser primer día del mes
     next_month_first = _add_months(d, 1)
     return next_month_first.fromordinal(next_month_first.toordinal() - 1)
 
 
 def get_month_window_appointments_controller(current_user: dict):
-    hospital_id = current_user.get("uid") if current_user else None
-    if not hospital_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid",
-        )
+    hospital_id = resolve_hospital_id(current_user)
 
     today_ba = datetime.now(BA_TZ).date()
     current_month_first = _first_day_of_month(today_ba)
 
-    desde = _add_months(current_month_first, -1)              # mes anterior (1er día)
-    end_month_first = _add_months(current_month_first, 2)     # primer día del mes +2
-    hasta = _last_day_of_month(end_month_first)               # último día del mes +2
+    desde = _add_months(current_month_first, -1)
+    end_month_first = _add_months(current_month_first, 2)
+    hasta = _last_day_of_month(end_month_first)
 
     return search_appointments_by_range_service(hospital_id, desde, hasta)
-

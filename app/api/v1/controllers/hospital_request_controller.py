@@ -1,4 +1,4 @@
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -9,25 +9,17 @@ from app.api.v1.services.hospital_request_service import (
     update_hospital_request_service,
     get_hospital_request_by_id_service,
 )
-
 from app.api.v1.services.appointment_service import cancel_appointments_by_request_service
+from app.utils.auth_utils import resolve_hospital_id
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 VALID_BLOOD_GROUPS = {"O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"}
 VALID_COMPONENTS = {"SANGRE", "PLAQUETAS", "MEDULA_OSEA"}
 
-def _get_hospital_id(current_user: dict) -> str:
-    hospital_id = current_user.get("uid") if current_user else None
-    if not hospital_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing uid",
-        )
-    return hospital_id
 
 def create_hospital_request_controller(body: HospitalRequestCreate, current_user: dict):
-    hospital_id = _get_hospital_id(current_user)
+    hospital_id = resolve_hospital_id(current_user)
 
     blood_group = body.blood_group.strip().upper()
     if blood_group not in VALID_BLOOD_GROUPS:
@@ -35,7 +27,10 @@ def create_hospital_request_controller(body: HospitalRequestCreate, current_user
 
     component = body.component.strip().upper()
     if component not in VALID_COMPONENTS:
-        raise HTTPException(status_code=400, detail="Invalid component (use SANGRE / PLAQUETAS / MEDULA_OSEA)")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid component (use SANGRE / PLAQUETAS / MEDULA_OSEA)",
+        )
 
     requested_by = body.requested_by.strip()
     if not requested_by:
@@ -51,12 +46,18 @@ def create_hospital_request_controller(body: HospitalRequestCreate, current_user
         normalized_component=component,
     )
 
+
 def get_hospital_requests_controller(current_user: dict):
-    hospital_id = _get_hospital_id(current_user)
+    hospital_id = resolve_hospital_id(current_user)
     return get_hospital_requests_service(hospital_id)
 
-def update_hospital_request_controller(request_id: str, body: UpdateHospitalRequestRequest, current_user: dict):
-    hospital_id = _get_hospital_id(current_user)
+
+def update_hospital_request_controller(
+    request_id: str,
+    body: UpdateHospitalRequestRequest,
+    current_user: dict,
+):
+    hospital_id = resolve_hospital_id(current_user)
 
     existing = get_hospital_request_by_id_service(hospital_id, request_id)
     if not existing:
@@ -65,15 +66,24 @@ def update_hospital_request_controller(request_id: str, body: UpdateHospitalRequ
     existing_status = existing.get("status")
 
     if existing_status in {"COMPLETO", "CANCELADO"}:
-        raise HTTPException(status_code=409, detail="HospitalRequest cannot be edited in terminal status")
+        raise HTTPException(
+            status_code=409,
+            detail="HospitalRequest cannot be edited in terminal status",
+        )
 
     patch = body.model_dump(exclude_unset=True)
 
     if existing_status == "FINALIZADO":
-        raise HTTPException(status_code=409, detail="FINALIZADO requests cannot be edited (only automatic transition to COMPLETO)")
+        raise HTTPException(
+            status_code=409,
+            detail="FINALIZADO requests cannot be edited (only automatic transition to COMPLETO)",
+        )
 
     if patch.get("status") == "COMPLETO":
-        raise HTTPException(status_code=400, detail="COMPLETO status is automatic and cannot be set manually")
+        raise HTTPException(
+            status_code=400,
+            detail="COMPLETO status is automatic and cannot be set manually",
+        )
 
     is_cancelling = patch.get("status") == "CANCELADO" and existing_status != "CANCELADO"
 
@@ -86,7 +96,6 @@ def update_hospital_request_controller(request_id: str, body: UpdateHospitalRequ
 
     updated_req = update_hospital_request_service(hospital_id, request_id, patch)
 
-    # NUEVO: side effect
     if is_cancelling:
         cancel_appointments_by_request_service(hospital_id, request_id)
 
@@ -94,7 +103,7 @@ def update_hospital_request_controller(request_id: str, body: UpdateHospitalRequ
 
 
 def get_hospital_request_by_id_controller(request_id: str, current_user: dict):
-    hospital_id = _get_hospital_id(current_user)
+    hospital_id = resolve_hospital_id(current_user)
 
     req = get_hospital_request_by_id_service(hospital_id, request_id)
     if not req:

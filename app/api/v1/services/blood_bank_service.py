@@ -10,6 +10,7 @@ from app.api.v1.services.hospital_request_service import (
 from app.firebase.firebase_client import db
 from app.schemas.blood_bank_schema import (
     DEFAULT_STOCKS,
+    DEFAULT_THRESHOLDS,
     BloodBankOut,
     BloodBankAdjustRequest,
     BloodBankThresholdsUpdateRequest,
@@ -43,8 +44,11 @@ def ensure_auto_request_if_low_service(hospital_id: str, blood_group: str):
         thr_ml = int(thresholds.get(blood_group, 0) or 0)
     except Exception:
         return
-
-    if stock_ml > thr_ml:
+    
+    if thr_ml <= 0:
+        return
+    
+    if stock_ml >= thr_ml:
         return
 
     existing = find_active_auto_request_by_blood_group_service(hospital_id, blood_group)
@@ -74,7 +78,7 @@ def get_or_create_blood_bank_service(hospital_id: str) -> BloodBankOut:
         payload = {
             "hospital_id": hospital_id,
             "stocks_ml": DEFAULT_STOCKS,
-            "thresholds_ml": {}}
+            "thresholds_ml": DEFAULT_THRESHOLDS}
         ref.set(payload, merge=False)
         return BloodBankOut(**payload)
 
@@ -211,9 +215,9 @@ def update_thresholds_service(hospital_id: str, body: BloodBankThresholdsUpdateR
 
         # si no existe, inicializamos
         if not snap.exists:
-            tx.set(ref, {"hospital_id": hospital_id, "stocks_ml": DEFAULT_STOCKS, "thresholds_ml": {}}, merge=False)
+            tx.set(ref, {"hospital_id": hospital_id, "stocks_ml": DEFAULT_STOCKS, "thresholds_ml": DEFAULT_THRESHOLDS}, merge=False)
             current_stocks = dict(DEFAULT_STOCKS)
-            current_thr = {}
+            current_thr = dict(DEFAULT_THRESHOLDS)
         else:
             data = snap.to_dict() or {}
 

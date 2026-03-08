@@ -8,6 +8,11 @@ DEFAULT_STOCKS: Dict[str, int] = {
     "AB+": 0, "AB-": 0, "O+": 0, "O-": 0,
 }
 
+DEFAULT_THRESHOLDS: Dict[str, int] = {
+    "A+": 0, "A-": 0, "B+": 0, "B-": 0,
+    "AB+": 0, "AB-": 0, "O+": 0, "O-": 0,
+}
+
 class BloodBankOut(BaseModel):
     hospital_id: str
     stocks_ml: Dict[BloodType, int] = Field(default_factory=dict)

@@ -89,3 +89,22 @@ async def get_user_profile(uid: str):
     if not doc.exists:
         return None
     return doc.to_dict()
+
+async def get_hospital_id_for_uid(uid: str) -> str:
+    profile = await get_user_profile(uid)
+
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"User profile not found for uid={uid}",
+        )
+
+    hospital_id = profile.get("hospitalId")  # 👈 como lo tenés en Firestore
+
+    if not hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"User uid={uid} has no hospitalId assigned",
+        )
+
+    return str(hospital_id)

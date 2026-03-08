@@ -35,18 +35,36 @@ def get_appointments_service(hospital_id: str):
 
 
 def get_appointment_by_id_service(hospital_id: str, appointment_id: str):
+    print("=== get_appointment_by_id_service ===")
+    print("hospital_id recibido:", hospital_id)
+    print("appointment_id recibido:", repr(appointment_id))
+
     doc_ref = db.collection("appointments").document(appointment_id)
     snap = doc_ref.get()
 
+    print("snap.exists:", snap.exists)
+
     if not snap.exists:
+        print("NO EXISTE DOC")
+        print("IDs reales en appointments para este hospital:")
+        docs = (
+            db.collection("appointments")
+            .where("hospital_id", "==", hospital_id)
+            .stream()
+        )
+        for d in docs:
+            print(" -", repr(d.id))
         return None
 
     data = snap.to_dict() or {}
+    print("hospital_id guardado en doc:", data.get("hospital_id"))
 
     if data.get("hospital_id") != hospital_id:
+        print("MISMATCH hospital_id")
         return None
 
     data["id"] = snap.id
+    print("OK appointment encontrado")
     return data
 
 
