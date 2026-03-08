@@ -1,3 +1,5 @@
+from app.api.v1.controllers.nearby_donor_controller import get_nearby_donors_for_request_controller
+from app.schemas.nearby_donor_schema import NearbyDonorsResponse
 from fastapi import APIRouter, Depends
 
 from app.core.security import get_current_user
@@ -78,3 +80,15 @@ async def update_donor_endpoint(
     current_user: dict = Depends(get_current_user),
 ):
     return update_donor_controller(donor_id, body, current_user)
+
+@router.get("/nearby-for-request/{request_id}", response_model=NearbyDonorsResponse)
+async def get_nearby_donors_for_request_endpoint(
+    request_id: str,
+    radius_km: float = 5.0,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_nearby_donors_for_request_controller(
+        request_id,
+        radius_km,
+        current_user,
+    )
