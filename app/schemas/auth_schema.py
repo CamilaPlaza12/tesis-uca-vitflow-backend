@@ -1,4 +1,9 @@
 from pydantic import BaseModel, EmailStr, Field
+from typing import Literal
+
+
+UserRole = Literal["HOSPITAL_ADMIN", "TECHNICIAN"]
+UserStatus = Literal["INVITED", "ACTIVE", "SUSPENDED"]
 
 
 class Address(BaseModel):
@@ -23,3 +28,5 @@ class UserResponse(BaseModel):
     full_name: str | None = None
     phone_number: str | None = None
     address: Address | None = None
+    role: UserRole | None = None
+    status: UserStatus | None = None

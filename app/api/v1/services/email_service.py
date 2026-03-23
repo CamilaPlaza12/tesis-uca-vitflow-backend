@@ -59,3 +59,17 @@ def send_onboarding_rejected(req: dict, review_note: str):
         <p><strong>Motivo:</strong> {review_note}</p>
         """
     })
+
+def send_technician_invitation(email: str, first_name: str, hospital_name: str, reset_link: str):
+    resend.Emails.send({
+        "from": FROM_EMAIL,
+        "to": email,
+        "subject": "Te invitaron a VitFlow - Activá tu cuenta",
+        "html": f"""
+        <p>Hola {first_name},</p>
+        <p>Te invitaron a formar parte del equipo de <strong>{hospital_name}</strong> en VitFlow.</p>
+        <p>Para activar tu cuenta o volver a definir tu contraseña, hacé click en el siguiente link:</p>
+        <p><a href="{reset_link}">Activar cuenta / Crear contraseña</a></p>
+        <p>Si no esperabas este correo, podés ignorarlo.</p>
+        """
+    })
