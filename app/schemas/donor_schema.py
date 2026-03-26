@@ -43,8 +43,12 @@ class DonorCreate(BaseModel):
 
     gender: Gender
     is_pregnant: Optional[bool] = Field(
-        ...,
-        description="Only applicable if gender is 'F'. Must be null otherwise."
+        default=None,
+        description="Legacy field. Only applicable if gender is 'F'. Must be null otherwise."
+    )
+    is_currently_pregnant: Optional[bool] = Field(
+        default=None,
+        description="New field for current pregnancy status."
     )
     medications: Optional[List[str]] = None
 
@@ -53,8 +57,19 @@ class DonorCreate(BaseModel):
 
     blood_group: BloodGroup
     has_recent_tattoo: bool = False
+    last_tattoo_or_piercing_date: Optional[str] = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$"
+    )
 
-    last_donation_date: Optional[str] = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    last_donation_date: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+    last_pregnancy_end_date: Optional[str] = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$"
+    )
+    pregnancy_end_type: Optional[Literal["VAGINAL_BIRTH", "CESAREAN", "NON_SPONTANEOUS_ABORTION"]] = None
+    is_breastfeeding: Optional[bool] = None
 
     address_text: str = Field(..., min_length=5, max_length=180)
 
@@ -62,12 +77,28 @@ class DonorCreate(BaseModel):
     has_consent: bool = True
 
     has_fever_or_infection: bool = False
+    has_active_fever_or_infection: Optional[bool] = None
+    infection_resolved_date: Optional[str] = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$"
+    )
+
     screening_updated_at: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_pregnancy_consistency(self):
-        if self.gender != "F" and self.is_pregnant is not None:
-            raise ValueError("is_pregnant must be null unless gender is 'F'")
+        if self.gender != "F":
+            if self.is_pregnant is not None:
+                raise ValueError("is_pregnant must be null unless gender is 'F'")
+            if self.is_currently_pregnant is not None:
+                raise ValueError("is_currently_pregnant must be null unless gender is 'F'")
+            if self.last_pregnancy_end_date is not None:
+                raise ValueError("last_pregnancy_end_date must be null unless gender is 'F'")
+            if self.pregnancy_end_type is not None:
+                raise ValueError("pregnancy_end_type must be null unless gender is 'F'")
+            if self.is_breastfeeding is not None:
+                raise ValueError("is_breastfeeding must be null unless gender is 'F'")
+
         return self
 
 
@@ -83,6 +114,7 @@ class Donor(BaseModel):
 
     gender: Gender
     is_pregnant: Optional[bool]
+    is_currently_pregnant: Optional[bool]
     medications: Optional[List[str]]
 
     birth_date: str
@@ -92,7 +124,12 @@ class Donor(BaseModel):
     blood_group: BloodGroup
 
     has_recent_tattoo: bool
+    last_tattoo_or_piercing_date: Optional[str]
     last_donation_date: Optional[str]
+
+    last_pregnancy_end_date: Optional[str]
+    pregnancy_end_type: Optional[str]
+    is_breastfeeding: Optional[bool]
 
     address_text: str
     geo: GeoPoint
@@ -101,6 +138,8 @@ class Donor(BaseModel):
     has_consent: bool
 
     has_fever_or_infection: bool = False
+    has_active_fever_or_infection: Optional[bool] = None
+    infection_resolved_date: Optional[str] = None
     screening_updated_at: Optional[str] = None
 
     eligibility_status: Optional[EligibilityStatus] = None
@@ -110,12 +149,23 @@ class Donor(BaseModel):
 
 
 class DonorUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     weight_kg: Optional[float] = Field(None, gt=0, le=300)
     has_recent_tattoo: Optional[bool] = None
+    last_tattoo_or_piercing_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     last_donation_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     address_text: Optional[str] = Field(None, min_length=5, max_length=180)
 
     is_pregnant: Optional[bool] = None
+    is_currently_pregnant: Optional[bool] = None
+    last_pregnancy_end_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    pregnancy_end_type: Optional[Literal["VAGINAL_BIRTH", "CESAREAN", "NON_SPONTANEOUS_ABORTION"]] = None
+    is_breastfeeding: Optional[bool] = None
+
     medications: Optional[List[str]] = None
     has_fever_or_infection: Optional[bool] = None
+    has_active_fever_or_infection: Optional[bool] = None
+    infection_resolved_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
     screening_updated_at: Optional[str] = None

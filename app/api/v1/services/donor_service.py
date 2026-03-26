@@ -30,9 +30,19 @@ def _attach_age(donor_dict: dict) -> dict:
 def _with_defaults(donor_dict: dict) -> dict:
     donor_dict.setdefault("medications", [])
     donor_dict.setdefault("has_recent_tattoo", False)
+    donor_dict.setdefault("last_tattoo_or_piercing_date", None)
     donor_dict.setdefault("last_donation_date", None)
+
     donor_dict.setdefault("is_pregnant", None)
+    donor_dict.setdefault("is_currently_pregnant", None)
+    donor_dict.setdefault("last_pregnancy_end_date", None)
+    donor_dict.setdefault("pregnancy_end_type", None)
+    donor_dict.setdefault("is_breastfeeding", None)
+
     donor_dict.setdefault("has_fever_or_infection", False)
+    donor_dict.setdefault("has_active_fever_or_infection", None)
+    donor_dict.setdefault("infection_resolved_date", None)
+
     donor_dict.setdefault("screening_updated_at", None)
 
     donor_dict.setdefault("eligibility_status", None)

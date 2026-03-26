@@ -12,7 +12,7 @@ from app.api.v1.services.donor_service import (
     validate_address_service,
 )
 from app.api.v1.services.donor_eligibility_service import (
-    evaluate_donor_eligibility_service,
+    evaluate_donor_eligibility_service
 )
 
 
