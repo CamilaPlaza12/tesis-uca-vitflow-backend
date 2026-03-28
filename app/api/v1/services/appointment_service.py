@@ -5,7 +5,7 @@ from app.schemas.appointment_schema import AppointmentCreate, RescheduleAppointm
 from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
 from datetime import datetime
 from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service,build_slot_key
-from app.api.v1.services.blood_bank_service import add_blood_ml_by_group_service
+from app.api.v1.services.blood_bank_service import add_blood_units_by_group_service
 
 from app.api.v1.services.blood_bank_service import ensure_auto_request_if_low_service
 
@@ -14,7 +14,7 @@ from datetime import datetime, date
 
 
 HOSPITAL_REQUESTS_COLLECTION = "hospital_requests"
-DONATION_LITERS_PER_COMPLETED_APPOINTMENT = 0.45
+DONATION_UNITS_PER_COMPLETED_APPOINTMENT = 0.45
 
 
 def get_appointments_service(hospital_id: str):
@@ -140,8 +140,8 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
     """
     Se llama SOLO cuando un turno transiciona a COMPLETADO por primera vez.
     - Suma 0.45 L al banco de sangre
-    - Actualiza collected_liters del pedido
-    - Si alcanza requested_liters => pedido pasa a COMPLETO
+    - Actualiza collected_units del pedido
+    - Si alcanza requested_units => pedido pasa a COMPLETO
     - Si el pedido era automático (Sistema), re-chequea stock post-cierre
       y crea nuevo pedido automático si sigue bajo el umbral
     """
@@ -158,18 +158,18 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
         return
 
     # 1️⃣ Sumar sangre al banco (esto ya dispara chequeo normal de stock)
-    add_blood_ml_by_group_service(hospital_id, blood_group, 450)
+    add_blood_units_by_group_service(hospital_id, blood_group, 450)
 
     req_status = hospital_request.get("status")
     if req_status not in {"ACTIVO", "FINALIZADO"}:
         return
 
-    collected = float(hospital_request.get("collected_liters", 0) or 0)
-    requested = float(hospital_request.get("requested_liters", 0) or 0)
+    collected = float(hospital_request.get("collected_units", 0) or 0)
+    requested = float(hospital_request.get("requested_units", 0) or 0)
 
-    new_collected = round(collected + DONATION_LITERS_PER_COMPLETED_APPOINTMENT, 4)
+    new_collected = round(collected + DONATION_UNITS_PER_COMPLETED_APPOINTMENT, 4)
 
-    patch = {"collected_liters": new_collected}
+    patch = {"collected_units": new_collected}
 
     completed_now = False
     if requested > 0 and new_collected >= requested:

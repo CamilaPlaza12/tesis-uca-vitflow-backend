@@ -15,12 +15,12 @@ DEFAULT_THRESHOLDS: Dict[str, int] = {
 
 class BloodBankOut(BaseModel):
     hospital_id: str
-    stocks_ml: Dict[BloodType, int] = Field(default_factory=dict)
-    thresholds_ml: Dict[BloodType, int] = Field(default_factory=dict)
+    stocks_units: Dict[BloodType, int] = Field(default_factory=dict)
+    thresholds_units: Dict[BloodType, int] = Field(default_factory=dict)
 
 class BloodBankAdjustRequest(BaseModel):
     blood_type: BloodType
-    amount_ml: int = Field(..., gt=0, le=5_000_000)  # vos ajustá el max si querés
+    amount_units: int = Field(..., gt=0, le=5_000_000)  # vos ajustá el max si querés
 
 class BloodBankThresholdsUpdateRequest(BaseModel):
-    thresholds_ml: Dict[BloodType, int] = Field(default_factory=dict)
+    thresholds_units: Dict[BloodType, int] = Field(default_factory=dict)

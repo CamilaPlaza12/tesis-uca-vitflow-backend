@@ -19,7 +19,7 @@ def create_hospital_request_service(
     data["hospital_id"] = hospital_id
     data["datetime_local"] = now_ba_iso
     data["status"] = "ACTIVO"
-    data["collected_liters"] = 0
+    data["collected_units"] = 0
     data["blood_group"] = normalized_blood_group
     data["component"] = normalized_component
 
@@ -71,8 +71,8 @@ def update_hospital_request_service(hospital_id: str, request_id: str, patch: di
     if data.get("hospital_id") != hospital_id:
         raise HTTPException(status_code=404, detail="HospitalRequest not found")
 
-    patch.pop("requested_liters", None)
-    patch.pop("collected_liters", None)
+    patch.pop("requested_units", None)
+    patch.pop("collected_units", None)
 
     doc_ref.update(patch)
 
@@ -101,7 +101,7 @@ def find_active_auto_request_by_blood_group_service(hospital_id: str, blood_grou
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
-def create_auto_low_stock_request_service(hospital_id: str, blood_group: str, requested_liters: float = 1.0):
+def create_auto_low_stock_request_service(hospital_id: str, blood_group: str, requested_units: float = 1.0):
     """
     Crea pedido automático por bajo stock.
     requested_by = "Sistema" (clave anti-duplicado)
@@ -115,8 +115,8 @@ def create_auto_low_stock_request_service(hospital_id: str, blood_group: str, re
         "hospital_unit": "Guardia",      # obligatorio por tu schema
         "component": "SANGRE",           # no importa para la lógica, dejalo fijo
         "blood_group": blood_group,
-        "requested_liters": float(requested_liters),
-        "collected_liters": 0,
+        "requested_units": float(requested_units),
+        "collected_units": 0,
         "priority": "URGENTE",
         "status": "ACTIVO",
         "requested_by": "Sistema",

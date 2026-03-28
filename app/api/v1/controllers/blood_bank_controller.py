@@ -35,8 +35,8 @@ async def add_stock_controller(body: BloodBankAdjustRequest, current_user: dict)
 
     if not body.blood_type:
         raise HTTPException(status_code=400, detail="blood_type is required")
-    if body.amount_ml is None or body.amount_ml <= 0:
-        raise HTTPException(status_code=400, detail="amount_ml must be > 0")
+    if body.amount_units is None or body.amount_units <= 0:
+        raise HTTPException(status_code=400, detail="amount_units must be > 0")
 
     return add_stock_service(hospital_id, body)
 
@@ -46,8 +46,8 @@ async def remove_stock_controller(body: BloodBankAdjustRequest, current_user: di
 
     if not body.blood_type:
         raise HTTPException(status_code=400, detail="blood_type is required")
-    if body.amount_ml is None or body.amount_ml <= 0:
-        raise HTTPException(status_code=400, detail="amount_ml must be > 0")
+    if body.amount_units is None or body.amount_units <= 0:
+        raise HTTPException(status_code=400, detail="amount_units must be > 0")
 
     return remove_stock_service(hospital_id, body)
 

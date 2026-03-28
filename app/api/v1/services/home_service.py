@@ -22,8 +22,8 @@ def get_home_summary_service(hospital_id: str) -> dict:
 
     # 1) Blood bank
     blood_bank = get_or_create_blood_bank_service(hospital_id)
-    stocks = blood_bank.stocks_ml or {}
-    thresholds = blood_bank.thresholds_ml or {}
+    stocks = blood_bank.stocks_units or {}
+    thresholds = blood_bank.thresholds_units or {}
 
     total_units = sum(int(v or 0) for v in stocks.values())
 
@@ -72,7 +72,7 @@ def get_home_summary_service(hospital_id: str) -> dict:
             "hospital_unit": req.get("hospital_unit") or "",
             "component": req.get("component") or "",
             "blood_group": req.get("blood_group") or "",
-            "requested_liters": req.get("requested_liters") or 0,
+            "requested_units": req.get("requested_units") or 0,
             "priority": req.get("priority") or "",
             "status": req.get("status") or "",
         })
