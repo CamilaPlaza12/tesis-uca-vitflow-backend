@@ -1,6 +1,7 @@
-from fastapi import HTTPException
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+from fastapi import HTTPException
 
 from app.schemas.hospital_request_schema import HospitalRequestCreate, UpdateHospitalRequestRequest
 from app.api.v1.services.hospital_request_service import (
@@ -16,6 +17,16 @@ BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 VALID_BLOOD_GROUPS = {"O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"}
 VALID_COMPONENTS = {"SANGRE", "PLAQUETAS", "MEDULA_OSEA"}
+
+
+def _parse_iso_datetime_or_400(value: str, field_name: str) -> datetime:
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BA_TZ)
+        return dt
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be a valid ISO datetime")
 
 
 def create_hospital_request_controller(body: HospitalRequestCreate, current_user: dict):
@@ -36,7 +47,12 @@ def create_hospital_request_controller(body: HospitalRequestCreate, current_user
     if not requested_by:
         raise HTTPException(status_code=400, detail="requested_by is required")
 
-    now_ba_iso = datetime.now(BA_TZ).isoformat(timespec="seconds")
+    end_dt = _parse_iso_datetime_or_400(body.end_date, "end_date")
+    now_ba = datetime.now(BA_TZ)
+    if end_dt <= now_ba:
+        raise HTTPException(status_code=400, detail="end_date must be in the future")
+
+    now_ba_iso = now_ba.isoformat(timespec="seconds")
 
     return create_hospital_request_service(
         hospital_id=hospital_id,
@@ -84,6 +100,12 @@ def update_hospital_request_controller(
             status_code=400,
             detail="COMPLETO status is automatic and cannot be set manually",
         )
+
+    if "end_date" in patch and patch["end_date"] is not None:
+        end_dt = _parse_iso_datetime_or_400(patch["end_date"], "end_date")
+        now_ba = datetime.now(BA_TZ)
+        if end_dt <= now_ba:
+            raise HTTPException(status_code=400, detail="end_date must be in the future")
 
     is_cancelling = patch.get("status") == "CANCELADO" and existing_status != "CANCELADO"
 

@@ -1,17 +1,14 @@
-from app.api.v1.services.available_slots_service import reserve_slot_service
+from datetime import datetime, date
+
+from fastapi import HTTPException
+
 from app.firebase.firebase_client import db
-from app.schemas.appointment_schema import AppointmentCreate, RescheduleAppointmentRequest
+from app.schemas.appointment_schema import AppointmentCreate, AppointmentCreateFromVito, RescheduleAppointmentRequest
 
 from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
-from datetime import datetime
-from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service,build_slot_key
+from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service
 from app.api.v1.services.blood_bank_service import add_blood_units_by_group_service
-
 from app.api.v1.services.blood_bank_service import ensure_auto_request_if_low_service
-
-
-from datetime import datetime, date 
-
 
 HOSPITAL_REQUESTS_COLLECTION = "hospital_requests"
 DONATION_UNITS_PER_COMPLETED_APPOINTMENT = 0.45
@@ -35,36 +32,18 @@ def get_appointments_service(hospital_id: str):
 
 
 def get_appointment_by_id_service(hospital_id: str, appointment_id: str):
-    print("=== get_appointment_by_id_service ===")
-    print("hospital_id recibido:", hospital_id)
-    print("appointment_id recibido:", repr(appointment_id))
-
     doc_ref = db.collection("appointments").document(appointment_id)
     snap = doc_ref.get()
 
-    print("snap.exists:", snap.exists)
-
     if not snap.exists:
-        print("NO EXISTE DOC")
-        print("IDs reales en appointments para este hospital:")
-        docs = (
-            db.collection("appointments")
-            .where("hospital_id", "==", hospital_id)
-            .stream()
-        )
-        for d in docs:
-            print(" -", repr(d.id))
         return None
 
     data = snap.to_dict() or {}
-    print("hospital_id guardado en doc:", data.get("hospital_id"))
 
     if data.get("hospital_id") != hospital_id:
-        print("MISMATCH hospital_id")
         return None
 
     data["id"] = snap.id
-    print("OK appointment encontrado")
     return data
 
 
@@ -80,6 +59,39 @@ def create_appointment_manual_service(hospital_id: str, appointment: Appointment
 
     if data.get("date_local") is not None:
         data["date_local"] = data["date_local"].isoformat()
+
+    res = db.collection("appointments").add(data)
+    doc_ref = res[1] if isinstance(res, (list, tuple)) and len(res) == 2 else res
+
+    return {"id": doc_ref.id, **data}
+
+
+def create_appointment_from_vito_service(
+    hospital_id: str,
+    appointment: AppointmentCreateFromVito,
+    donor: dict,
+    donation_type: str,
+):
+    full_name = f"{(donor.get('first_name') or '').strip()} {(donor.get('last_name') or '').strip()}".strip()
+    if not full_name:
+        raise HTTPException(status_code=409, detail="Donor full_name is required")
+
+    slot_key = reserve_slot_service(hospital_id, appointment.date_local, appointment.time_local)
+
+    data = {
+        "hospital_request_id": appointment.hospital_request_id,
+        "date_local": appointment.date_local.isoformat(),
+        "time_local": appointment.time_local,
+        "donor": {
+            "full_name": full_name,
+            "dni": donor.get("dni"),
+        },
+        "donation_type": donation_type,
+        "hospital_id": hospital_id,
+        "source": "VITO_WHATSAPP",
+        "status": "PROGRAMADO",
+        "slot_key": slot_key,
+    }
 
     res = db.collection("appointments").add(data)
     doc_ref = res[1] if isinstance(res, (list, tuple)) and len(res) == 2 else res
@@ -137,14 +149,6 @@ def reschedule_appointment_service(
 
 
 def apply_completion_side_effects_service(hospital_id: str, appointment_data: dict):
-    """
-    Se llama SOLO cuando un turno transiciona a COMPLETADO por primera vez.
-    - Suma 0.45 L al banco de sangre
-    - Actualiza collected_units del pedido
-    - Si alcanza requested_units => pedido pasa a COMPLETO
-    - Si el pedido era automático (Sistema), re-chequea stock post-cierre
-      y crea nuevo pedido automático si sigue bajo el umbral
-    """
     req_id = (appointment_data.get("hospital_request_id") or "").strip()
     if not req_id:
         return
@@ -157,7 +161,6 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
     if not blood_group:
         return
 
-    # 1️⃣ Sumar sangre al banco (esto ya dispara chequeo normal de stock)
     add_blood_units_by_group_service(hospital_id, blood_group, 450)
 
     req_status = hospital_request.get("status")
@@ -178,9 +181,9 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
 
     db.collection(HOSPITAL_REQUESTS_COLLECTION).document(req_id).update(patch)
 
-    # 2️⃣ 🔁 Re-chequeo post-cierre SOLO si era pedido automático
     if completed_now and hospital_request.get("requested_by") == "Sistema":
         ensure_auto_request_if_low_service(hospital_id, blood_group)
+
 
 def reschedule_appointment_with_slots_service(
     hospital_id: str,
@@ -210,10 +213,8 @@ def reschedule_appointment_with_slots_service(
     new_slot_key = reserve_slot_service(hospital_id, new_date, new_time)
 
     try:
-        # 2) liberar cupo del slot viejo
         release_slot_service(hospital_id, old_date, old_time_str)
 
-        # 3) update appointment
         doc_ref.update({
             "date_local": new_date.isoformat(),
             "time_local": new_time,
@@ -235,12 +236,6 @@ def reschedule_appointment_with_slots_service(
 
 
 def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id: str) -> int:
-    """
-    Cancela todos los appointments activos (PROGRAMADO/CONFIRMADO) asociados al pedido.
-    Libera el cupo del slot si corresponde.
-    Devuelve cantidad cancelada.
-    """
-    # Traemos appointments del hospital por request_id
     docs = (
         db.collection("appointments")
         .where("hospital_id", "==", hospital_id)
@@ -267,11 +262,11 @@ def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id
             except Exception:
                 raise HTTPException(status_code=409, detail="Failed to release slot for an appointment")
 
-        # Update status
         snap.reference.update({"status": "CANCELADO"})
         cancelled += 1
 
     return cancelled
+
 
 def search_appointments_by_range_service(hospital_id: str, desde: date, hasta: date):
     desde_str = desde.isoformat()

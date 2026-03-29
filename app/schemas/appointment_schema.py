@@ -4,7 +4,8 @@ from datetime import date
 
 DonationType = Literal["SANGRE", "PLAQUETAS", "MEDULA_OSEA"]
 AppointmentStatus = Literal["PROGRAMADO", "CONFIRMADO", "CANCELADO", "COMPLETADO", "NO_PRESENTADO"]
-AppointmentSource = Literal["HOSPITAL_MANUAL", "CHATBOT_WHATSAPP"]
+AppointmentSource = Literal["HOSPITAL_MANUAL", "VITO_WHATSAPP"]
+
 
 class Donor(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=100)
@@ -18,6 +19,14 @@ class AppointmentCreate(BaseModel):
     donor: Donor
     donation_type: DonationType
 
+
+class AppointmentCreateFromVito(BaseModel):
+    donor_id: str = Field(..., min_length=1)
+    hospital_request_id: str = Field(..., min_length=1)
+    date_local: date
+    time_local: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+
+
 class Appointment(BaseModel):
     hospital_request_id: str
     date_local: date
@@ -27,11 +36,14 @@ class Appointment(BaseModel):
     status: AppointmentStatus
     source: AppointmentSource
 
+
 class AppointmentDB(Appointment):
     hospital_id: str
 
+
 class UpdateAppointmentStatusRequest(BaseModel):
     status: AppointmentStatus
+
 
 class RescheduleAppointmentRequest(BaseModel):
     date_local: date

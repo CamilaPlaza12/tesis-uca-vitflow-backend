@@ -3,6 +3,7 @@ from typing import Literal, Optional
 
 HospitalRequestPriority = Literal["NORMAL", "URGENTE", "CRITICA"]
 HospitalRequestStatus = Literal["ACTIVO", "COMPLETO", "CANCELADO", "FINALIZADO"]
+HospitalRequestType = Literal["NORMAL", "CAMPAÑA"]
 
 HospitalUnit = Literal[
     "ITU",
@@ -12,6 +13,7 @@ HospitalUnit = Literal[
     "Clinica Medica"
 ]
 
+
 class HospitalRequestCreate(BaseModel):
     hospital_unit: HospitalUnit
     component: str = Field(..., min_length=1, max_length=100)
@@ -20,6 +22,10 @@ class HospitalRequestCreate(BaseModel):
     priority: HospitalRequestPriority
     requested_by: str = Field(..., min_length=1, max_length=100)
     comments: Optional[str] = Field(None, max_length=500)
+
+    request_type: HospitalRequestType = "NORMAL"
+    end_date: str = Field(..., min_length=10, max_length=40)
+
 
 class HospitalRequest(BaseModel):
     datetime_local: str
@@ -33,11 +39,17 @@ class HospitalRequest(BaseModel):
     requested_by: str
     comments: Optional[str] = None
 
+    request_type: HospitalRequestType = "NORMAL"
+    end_date: str
+
+
 class HospitalRequestDB(HospitalRequest):
     hospital_id: str
 
+
 class UpdateHospitalRequestStatusRequest(BaseModel):
     status: HospitalRequestStatus
+
 
 class UpdateHospitalRequestRequest(BaseModel):
     hospital_unit: Optional[HospitalUnit] = None
@@ -45,4 +57,5 @@ class UpdateHospitalRequestRequest(BaseModel):
     status: Optional[HospitalRequestStatus] = None
     comments: Optional[str] = Field(None, max_length=500)
 
-
+    request_type: Optional[HospitalRequestType] = None
+    end_date: Optional[str] = Field(None, min_length=10, max_length=40)

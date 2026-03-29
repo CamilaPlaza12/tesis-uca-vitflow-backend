@@ -1,9 +1,11 @@
-from fastapi import HTTPException, status
 from datetime import datetime, time, date
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException, status
+
 from app.schemas.appointment_schema import (
     AppointmentCreate,
+    AppointmentCreateFromVito,
     RescheduleAppointmentRequest,
     UpdateAppointmentStatusRequest,
 )
@@ -12,20 +14,33 @@ from app.api.v1.services.appointment_service import (
     get_appointments_service,
     get_appointment_by_id_service,
     create_appointment_manual_service,
+    create_appointment_from_vito_service,
     search_appointments_by_range_service,
     update_appointment_status_service,
     apply_completion_side_effects_service,
     reschedule_appointment_with_slots_service,
 )
-from app.api.v1.services.available_slots_service import release_slot_service
-from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
-
+from app.api.v1.services.available_slots_service import release_slot_service, list_available_slots_for_request_service
+from app.api.v1.services.hospital_request_service import (
+    get_hospital_request_by_id_service,
+    get_hospital_request_any_service,
+)
+from app.api.v1.services.donor_service import get_donor_by_id_service
+from app.api.v1.services.donor_eligibility_service import evaluate_donor_eligibility_service
 from app.utils.auth_utils import resolve_hospital_id
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
-
 MIN_TIME = time(7, 0)
 MAX_TIME = time(20, 0)
+
+
+def _require_auth(current_user: dict):
+    uid = current_user.get("uid") if current_user else None
+    if not uid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token: missing uid",
+        )
 
 
 def get_appointments_controller(current_user: dict):
@@ -35,9 +50,6 @@ def get_appointments_controller(current_user: dict):
 
 def get_appointment_by_id_controller(appointment_id: str, current_user: dict):
     hospital_id = resolve_hospital_id(current_user)
-    print("=== get_appointment_by_id_controller ===")
-    print("hospital_id resuelto:", hospital_id)
-    print("appointment_id:", repr(appointment_id))
     if not appointment_id or not appointment_id.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -96,6 +108,63 @@ def create_appointment_manual_controller(appointment: AppointmentCreate, current
         raise HTTPException(status_code=400, detail="Appointment datetime cannot be in the past")
 
     return create_appointment_manual_service(hospital_id, appointment)
+
+
+def create_appointment_from_vito_controller(body: AppointmentCreateFromVito, current_user: dict):
+    _require_auth(current_user)
+
+    req_id = body.hospital_request_id.strip()
+    if not req_id:
+        raise HTTPException(status_code=400, detail="hospital_request_id is required")
+
+    hospital_request = get_hospital_request_any_service(req_id)
+    if not hospital_request:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    if hospital_request.get("status") != "ACTIVO":
+        raise HTTPException(status_code=409, detail="Cannot create appointment: HospitalRequest is not ACTIVO")
+
+    try:
+        end_dt = datetime.fromisoformat(hospital_request.get("end_date"))
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=BA_TZ)
+    except Exception:
+        raise HTTPException(status_code=409, detail="HospitalRequest has invalid end_date")
+
+    try:
+        hh, mm = body.time_local.split(":")
+        t = time(int(hh), int(mm))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid time_local format")
+
+    if t.minute % 5 != 0:
+        raise HTTPException(
+            status_code=400,
+            detail="time_local must be in 5-minute intervals (00, 05, 10, ..., 55)",
+        )
+
+    now_ba = datetime.now(BA_TZ)
+    appt_dt_ba = datetime.combine(body.date_local, t).replace(tzinfo=BA_TZ)
+    if appt_dt_ba < now_ba:
+        raise HTTPException(status_code=400, detail="Appointment datetime cannot be in the past")
+
+    if appt_dt_ba > end_dt:
+        raise HTTPException(status_code=400, detail="Appointment datetime cannot be after request end_date")
+
+    donor = get_donor_by_id_service(body.donor_id)
+    if not donor:
+        raise HTTPException(status_code=404, detail="Donor not found")
+
+    evaluation = evaluate_donor_eligibility_service(body.donor_id)
+    if not evaluation or evaluation.get("status") != "APT":
+        raise HTTPException(status_code=409, detail="Donor is not eligible to book an appointment")
+
+    component = (hospital_request.get("component") or "").strip().upper()
+    if component not in {"SANGRE", "PLAQUETAS", "MEDULA_OSEA"}:
+        raise HTTPException(status_code=409, detail="HospitalRequest has invalid component")
+
+    hospital_id = hospital_request.get("hospital_id")
+    return create_appointment_from_vito_service(hospital_id, body, donor, component)
 
 
 def _validate_status_transition(current_status: str, new_status: str):
@@ -246,3 +315,15 @@ def get_month_window_appointments_controller(current_user: dict):
     hasta = _last_day_of_month(end_month_first)
 
     return search_appointments_by_range_service(hospital_id, desde, hasta)
+
+
+def get_available_slots_for_request_controller(request_id: str, days_ahead: int, current_user: dict):
+    _require_auth(current_user)
+
+    if not request_id or not request_id.strip():
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    if days_ahead <= 0:
+        raise HTTPException(status_code=400, detail="days_ahead must be > 0")
+
+    return list_available_slots_for_request_service(request_id, days_ahead)

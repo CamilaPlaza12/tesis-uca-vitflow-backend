@@ -13,6 +13,8 @@ from app.api.v1.controllers.donor_controller import (
     get_all_donors_controller,
     get_donors_by_blood_group_controller,
     evaluate_donor_eligibility_controller,
+    get_nearby_donation_opportunities_for_donor_controller,
+    get_campaigns_for_donor_controller,
 )
 
 router = APIRouter(prefix="/donors", tags=["Donors"])
@@ -40,6 +42,23 @@ async def get_donor_by_dni_endpoint(
     current_user: dict = Depends(get_current_user),
 ):
     return get_donor_by_dni_controller(dni, current_user)
+
+
+@router.get("/by-dni/{dni}/donation-opportunities")
+async def get_nearby_donation_opportunities_for_donor_endpoint(
+    dni: str,
+    radius_km: float = 5.0,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_nearby_donation_opportunities_for_donor_controller(dni, radius_km, current_user)
+
+
+@router.get("/by-dni/{dni}/campaigns")
+async def get_campaigns_for_donor_endpoint(
+    dni: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_campaigns_for_donor_controller(dni, current_user)
 
 
 @router.get("/")
@@ -80,6 +99,7 @@ async def update_donor_endpoint(
     current_user: dict = Depends(get_current_user),
 ):
     return update_donor_controller(donor_id, body, current_user)
+
 
 @router.get("/nearby-for-request/{request_id}", response_model=NearbyDonorsResponse)
 async def get_nearby_donors_for_request_endpoint(
