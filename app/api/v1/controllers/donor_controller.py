@@ -14,6 +14,10 @@ from app.api.v1.services.donor_service import (
 from app.api.v1.services.donor_eligibility_service import (
     evaluate_donor_eligibility_service
 )
+from app.api.v1.services.donor_opportunity_service import (
+    get_nearby_donation_opportunities_for_donor_service,
+    get_campaigns_for_donor_service,
+)
 
 
 def _require_auth(current_user: dict):
@@ -165,5 +169,42 @@ def evaluate_donor_eligibility_controller(donor_id: str, current_user: dict):
         raise
     except Exception:
         print("[DONOR_CONTROLLER] ERROR en evaluate_donor_eligibility_controller")
+        traceback.print_exc()
+        raise
+
+
+def get_nearby_donation_opportunities_for_donor_controller(dni: str, radius_km: float, current_user: dict):
+    _require_auth(current_user)
+
+    try:
+        normalized = dni.strip()
+        if not normalized:
+            raise HTTPException(status_code=400, detail="dni is required")
+
+        if radius_km <= 0:
+            raise HTTPException(status_code=400, detail="radius_km must be > 0")
+
+        return get_nearby_donation_opportunities_for_donor_service(normalized, radius_km)
+    except HTTPException:
+        raise
+    except Exception:
+        print("[DONOR_CONTROLLER] ERROR en get_nearby_donation_opportunities_for_donor_controller")
+        traceback.print_exc()
+        raise
+
+
+def get_campaigns_for_donor_controller(dni: str, current_user: dict):
+    _require_auth(current_user)
+
+    try:
+        normalized = dni.strip()
+        if not normalized:
+            raise HTTPException(status_code=400, detail="dni is required")
+
+        return get_campaigns_for_donor_service(normalized)
+    except HTTPException:
+        raise
+    except Exception:
+        print("[DONOR_CONTROLLER] ERROR en get_campaigns_for_donor_controller")
         traceback.print_exc()
         raise
