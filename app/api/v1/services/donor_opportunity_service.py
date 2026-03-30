@@ -98,9 +98,6 @@ def get_nearby_donation_opportunities_for_donor_service(dni: str, radius_km: flo
 
     results = []
     for req in _get_active_requests():
-        if req.get("request_type", "NORMAL") != "NORMAL":
-            continue
-
         end_dt = _parse_iso_datetime(req.get("end_date"))
         if not end_dt or end_dt < now_ba:
             continue
@@ -168,9 +165,6 @@ def get_campaigns_for_donor_service(dni: str):
 
     results = []
     for req in _get_active_requests():
-        if req.get("request_type") != "CAMPAÑA":
-            continue
-
         end_dt = _parse_iso_datetime(req.get("end_date"))
         if not end_dt or end_dt < now_ba:
             continue
@@ -197,7 +191,12 @@ def get_campaigns_for_donor_service(dni: str):
 
         results.append(_build_request_item(req, hospital, distance_km))
 
-    results.sort(key=lambda x: (x["distance_km"] is None, x["distance_km"] if x["distance_km"] is not None else 999999))
+    results.sort(
+        key=lambda x: (
+            x["distance_km"] is None,
+            x["distance_km"] if x["distance_km"] is not None else 999999,
+        )
+    )
 
     return {
         "donor_id": donor_id,
