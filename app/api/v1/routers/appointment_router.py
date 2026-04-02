@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends
 from datetime import date
+
+from fastapi import APIRouter, Depends
 
 from app.core.security import get_current_user
 from app.schemas.appointment_schema import (
@@ -17,6 +18,8 @@ from app.api.v1.controllers.appointment_controller import (
     update_appointment_status_controller,
     reschedule_appointment_controller,
     search_appointments_by_range_controller,
+    get_available_days_for_request_controller,
+    get_available_time_ranges_for_request_controller,
     get_available_slots_for_request_controller,
 )
 
@@ -42,22 +45,64 @@ async def get_month_window_appointments_endpoint(current_user: dict = Depends(ge
     return get_month_window_appointments_controller(current_user)
 
 
-@router.get("/request/{request_id}/available-slots")
-async def get_available_slots_for_request_endpoint(
+@router.get("/request/{request_id}/available-days")
+async def get_available_days_for_request_endpoint(
     request_id: str,
     days_ahead: int = 14,
     current_user: dict = Depends(get_current_user),
 ):
-    return get_available_slots_for_request_controller(request_id, days_ahead, current_user)
+    return get_available_days_for_request_controller(
+        request_id=request_id,
+        days_ahead=days_ahead,
+        current_user=current_user,
+    )
+
+
+@router.get("/request/{request_id}/available-time-ranges")
+async def get_available_time_ranges_for_request_endpoint(
+    request_id: str,
+    date_local: date,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_available_time_ranges_for_request_controller(
+        request_id=request_id,
+        date_local=date_local,
+        current_user=current_user,
+    )
+
+
+@router.get("/request/{request_id}/available-slots")
+async def get_available_slots_for_request_endpoint(
+    request_id: str,
+    date_local: date,
+    time_range: str | None = None,
+    limit: int = 8,
+    offset: int = 0,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_available_slots_for_request_controller(
+        request_id=request_id,
+        date_local=date_local,
+        time_range=time_range,
+        limit=limit,
+        offset=offset,
+        current_user=current_user,
+    )
 
 
 @router.get("/{appointment_id}")
-async def get_appointment_by_id_endpoint(appointment_id: str, current_user: dict = Depends(get_current_user)):
+async def get_appointment_by_id_endpoint(
+    appointment_id: str,
+    current_user: dict = Depends(get_current_user),
+):
     return get_appointment_by_id_controller(appointment_id, current_user)
 
 
 @router.post("/manual")
-async def create_appointment_manual_endpoint(appointment: AppointmentCreate, current_user: dict = Depends(get_current_user)):
+async def create_appointment_manual_endpoint(
+    appointment: AppointmentCreate,
+    current_user: dict = Depends(get_current_user),
+):
     return create_appointment_manual_controller(appointment, current_user)
 
 
@@ -70,10 +115,18 @@ async def create_appointment_from_vito_endpoint(
 
 
 @router.patch("/{appointment_id}/status")
-async def update_appointment_status_endpoint(appointment_id: str, body: UpdateAppointmentStatusRequest, current_user: dict = Depends(get_current_user)):
+async def update_appointment_status_endpoint(
+    appointment_id: str,
+    body: UpdateAppointmentStatusRequest,
+    current_user: dict = Depends(get_current_user),
+):
     return update_appointment_status_controller(appointment_id, body, current_user)
 
 
 @router.patch("/{appointment_id}/reschedule")
-async def reschedule_appointment_endpoint(appointment_id: str, body: RescheduleAppointmentRequest, current_user: dict = Depends(get_current_user)):
+async def reschedule_appointment_endpoint(
+    appointment_id: str,
+    body: RescheduleAppointmentRequest,
+    current_user: dict = Depends(get_current_user),
+):
     return reschedule_appointment_controller(appointment_id, body, current_user)

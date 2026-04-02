@@ -9,7 +9,6 @@ from app.schemas.appointment_schema import (
     RescheduleAppointmentRequest,
     UpdateAppointmentStatusRequest,
 )
-
 from app.api.v1.services.appointment_service import (
     get_appointments_service,
     get_appointment_by_id_service,
@@ -20,7 +19,12 @@ from app.api.v1.services.appointment_service import (
     apply_completion_side_effects_service,
     reschedule_appointment_with_slots_service,
 )
-from app.api.v1.services.available_slots_service import release_slot_service, list_available_slots_for_request_service
+from app.api.v1.services.available_slots_service import (
+    release_slot_service,
+    list_available_days_for_request_service,
+    list_available_time_ranges_for_request_service,
+    list_available_slots_for_request_service,
+)
 from app.api.v1.services.hospital_request_service import (
     get_hospital_request_by_id_service,
     get_hospital_request_any_service,
@@ -32,6 +36,7 @@ from app.utils.auth_utils import resolve_hospital_id
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 MIN_TIME = time(7, 0)
 MAX_TIME = time(20, 0)
+MAX_RANGE_DAYS = 366
 
 
 def _require_auth(current_user: dict):
@@ -50,6 +55,7 @@ def get_appointments_controller(current_user: dict):
 
 def get_appointment_by_id_controller(appointment_id: str, current_user: dict):
     hospital_id = resolve_hospital_id(current_user)
+
     if not appointment_id or not appointment_id.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -104,6 +110,7 @@ def create_appointment_manual_controller(appointment: AppointmentCreate, current
 
     now_ba = datetime.now(BA_TZ)
     appt_dt_ba = datetime.combine(appointment.date_local, t).replace(tzinfo=BA_TZ)
+
     if appt_dt_ba < now_ba:
         raise HTTPException(status_code=400, detail="Appointment datetime cannot be in the past")
 
@@ -145,6 +152,7 @@ def create_appointment_from_vito_controller(body: AppointmentCreateFromVito, cur
 
     now_ba = datetime.now(BA_TZ)
     appt_dt_ba = datetime.combine(body.date_local, t).replace(tzinfo=BA_TZ)
+
     if appt_dt_ba < now_ba:
         raise HTTPException(status_code=400, detail="Appointment datetime cannot be in the past")
 
@@ -258,6 +266,7 @@ def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppoi
 
     now_ba = datetime.now(BA_TZ)
     new_dt_ba = datetime.combine(body.date_local, t).replace(tzinfo=BA_TZ)
+
     if new_dt_ba < now_ba:
         raise HTTPException(status_code=400, detail="Rescheduled datetime cannot be in the past")
 
@@ -266,9 +275,6 @@ def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppoi
         raise HTTPException(status_code=404, detail="Appointment not found")
 
     return updated
-
-
-MAX_RANGE_DAYS = 366
 
 
 def search_appointments_by_range_controller(desde: date, hasta: date, current_user: dict):
@@ -309,7 +315,6 @@ def get_month_window_appointments_controller(current_user: dict):
 
     today_ba = datetime.now(BA_TZ).date()
     current_month_first = _first_day_of_month(today_ba)
-
     desde = _add_months(current_month_first, -1)
     end_month_first = _add_months(current_month_first, 2)
     hasta = _last_day_of_month(end_month_first)
@@ -317,7 +322,11 @@ def get_month_window_appointments_controller(current_user: dict):
     return search_appointments_by_range_service(hospital_id, desde, hasta)
 
 
-def get_available_slots_for_request_controller(request_id: str, days_ahead: int, current_user: dict):
+def get_available_days_for_request_controller(
+    request_id: str,
+    days_ahead: int,
+    current_user: dict,
+):
     _require_auth(current_user)
 
     if not request_id or not request_id.strip():
@@ -326,4 +335,51 @@ def get_available_slots_for_request_controller(request_id: str, days_ahead: int,
     if days_ahead <= 0:
         raise HTTPException(status_code=400, detail="days_ahead must be > 0")
 
-    return list_available_slots_for_request_service(request_id, days_ahead)
+    return list_available_days_for_request_service(
+        request_id=request_id,
+        days_ahead=days_ahead,
+    )
+
+
+def get_available_time_ranges_for_request_controller(
+    request_id: str,
+    date_local: date,
+    current_user: dict,
+):
+    _require_auth(current_user)
+
+    if not request_id or not request_id.strip():
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    return list_available_time_ranges_for_request_service(
+        request_id=request_id,
+        date_local=date_local,
+    )
+
+
+def get_available_slots_for_request_controller(
+    request_id: str,
+    date_local: date,
+    time_range: str | None,
+    limit: int,
+    offset: int,
+    current_user: dict,
+):
+    _require_auth(current_user)
+
+    if not request_id or not request_id.strip():
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    if limit <= 0:
+        raise HTTPException(status_code=400, detail="limit must be > 0")
+
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    return list_available_slots_for_request_service(
+        request_id=request_id,
+        date_local=date_local,
+        time_range=time_range,
+        limit=limit,
+        offset=offset,
+    )
