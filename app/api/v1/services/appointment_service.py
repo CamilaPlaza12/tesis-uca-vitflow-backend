@@ -4,7 +4,6 @@ from fastapi import HTTPException
 
 from app.firebase.firebase_client import db
 from app.schemas.appointment_schema import AppointmentCreate, AppointmentCreateFromVito, RescheduleAppointmentRequest
-
 from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
 from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service
 from app.api.v1.services.blood_bank_service import add_blood_units_by_group_service
@@ -12,6 +11,7 @@ from app.api.v1.services.blood_bank_service import ensure_auto_request_if_low_se
 
 HOSPITAL_REQUESTS_COLLECTION = "hospital_requests"
 DONATION_UNITS_PER_COMPLETED_APPOINTMENT = 0.45
+ACTIVE_APPOINTMENT_STATUSES = {"PROGRAMADO", "CONFIRMADO"}
 
 
 def get_appointments_service(hospital_id: str):
@@ -39,12 +39,40 @@ def get_appointment_by_id_service(hospital_id: str, appointment_id: str):
         return None
 
     data = snap.to_dict() or {}
-
     if data.get("hospital_id") != hospital_id:
         return None
 
     data["id"] = snap.id
     return data
+
+
+def donor_has_active_appointment_service(donor_id: str, donor_dni: str | None = None) -> bool:
+    donor_id = (donor_id or "").strip()
+    donor_dni = (donor_dni or "").strip()
+
+    if donor_id:
+        docs = (
+            db.collection("appointments")
+            .where("donor_id", "==", donor_id)
+            .stream()
+        )
+        for doc in docs:
+            data = doc.to_dict() or {}
+            if data.get("status") in ACTIVE_APPOINTMENT_STATUSES:
+                return True
+
+    if donor_dni:
+        docs = (
+            db.collection("appointments")
+            .where("donor.dni", "==", donor_dni)
+            .stream()
+        )
+        for doc in docs:
+            data = doc.to_dict() or {}
+            if data.get("status") in ACTIVE_APPOINTMENT_STATUSES:
+                return True
+
+    return False
 
 
 def create_appointment_manual_service(hospital_id: str, appointment: AppointmentCreate):
@@ -79,6 +107,7 @@ def create_appointment_from_vito_service(
     slot_key = reserve_slot_service(hospital_id, appointment.date_local, appointment.time_local)
 
     data = {
+        "donor_id": appointment.donor_id,
         "hospital_request_id": appointment.hospital_request_id,
         "date_local": appointment.date_local.isoformat(),
         "time_local": appointment.time_local,
@@ -107,12 +136,10 @@ def update_appointment_status_service(hospital_id: str, appointment_id: str, new
         return None
 
     data = snap.to_dict() or {}
-
     if data.get("hospital_id") != hospital_id:
         return None
 
     doc_ref.update({"status": new_status})
-
     data["status"] = new_status
     data["id"] = appointment_id
     return data
@@ -130,7 +157,6 @@ def reschedule_appointment_service(
         return None
 
     data = snap.to_dict() or {}
-
     if data.get("hospital_id") != hospital_id:
         return None
 
@@ -169,12 +195,11 @@ def apply_completion_side_effects_service(hospital_id: str, appointment_data: di
 
     collected = float(hospital_request.get("collected_units", 0) or 0)
     requested = float(hospital_request.get("requested_units", 0) or 0)
-
     new_collected = round(collected + DONATION_UNITS_PER_COMPLETED_APPOINTMENT, 4)
 
     patch = {"collected_units": new_collected}
-
     completed_now = False
+
     if requested > 0 and new_collected >= requested:
         patch["status"] = "COMPLETO"
         completed_now = True
@@ -214,13 +239,11 @@ def reschedule_appointment_with_slots_service(
 
     try:
         release_slot_service(hospital_id, old_date, old_time_str)
-
         doc_ref.update({
             "date_local": new_date.isoformat(),
             "time_local": new_time,
             "slot_key": new_slot_key,
         })
-
     except Exception:
         try:
             release_slot_service(hospital_id, new_date, new_time)

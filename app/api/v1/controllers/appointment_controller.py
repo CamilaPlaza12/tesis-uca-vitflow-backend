@@ -18,6 +18,7 @@ from app.api.v1.services.appointment_service import (
     update_appointment_status_service,
     apply_completion_side_effects_service,
     reschedule_appointment_with_slots_service,
+    donor_has_active_appointment_service,
 )
 from app.api.v1.services.available_slots_service import (
     release_slot_service,
@@ -46,6 +47,22 @@ def _require_auth(current_user: dict):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token: missing uid",
         )
+
+
+def _validate_donor_can_book(donor_id: str):
+    donor = get_donor_by_id_service(donor_id)
+    if not donor:
+        raise HTTPException(status_code=404, detail="Donor not found")
+
+    evaluation = evaluate_donor_eligibility_service(donor_id)
+    if not evaluation or evaluation.get("status") != "APT":
+        raise HTTPException(status_code=409, detail="Donor is not eligible to book an appointment")
+
+    donor_dni = (donor.get("dni") or "").strip()
+    if donor_has_active_appointment_service(donor_id, donor_dni):
+        raise HTTPException(status_code=409, detail="Donor already has an active appointment")
+
+    return donor
 
 
 def get_appointments_controller(current_user: dict):
@@ -159,13 +176,7 @@ def create_appointment_from_vito_controller(body: AppointmentCreateFromVito, cur
     if appt_dt_ba > end_dt:
         raise HTTPException(status_code=400, detail="Appointment datetime cannot be after request end_date")
 
-    donor = get_donor_by_id_service(body.donor_id)
-    if not donor:
-        raise HTTPException(status_code=404, detail="Donor not found")
-
-    evaluation = evaluate_donor_eligibility_service(body.donor_id)
-    if not evaluation or evaluation.get("status") != "APT":
-        raise HTTPException(status_code=409, detail="Donor is not eligible to book an appointment")
+    donor = _validate_donor_can_book(body.donor_id)
 
     component = (hospital_request.get("component") or "").strip().upper()
     if component not in {"SANGRE", "PLAQUETAS", "MEDULA_OSEA"}:
@@ -324,6 +335,7 @@ def get_month_window_appointments_controller(current_user: dict):
 
 def get_available_days_for_request_controller(
     request_id: str,
+    donor_id: str,
     days_ahead: int,
     current_user: dict,
 ):
@@ -332,8 +344,13 @@ def get_available_days_for_request_controller(
     if not request_id or not request_id.strip():
         raise HTTPException(status_code=400, detail="request_id is required")
 
+    if not donor_id or not donor_id.strip():
+        raise HTTPException(status_code=400, detail="donor_id is required")
+
     if days_ahead <= 0:
         raise HTTPException(status_code=400, detail="days_ahead must be > 0")
+
+    _validate_donor_can_book(donor_id)
 
     return list_available_days_for_request_service(
         request_id=request_id,
@@ -343,6 +360,7 @@ def get_available_days_for_request_controller(
 
 def get_available_time_ranges_for_request_controller(
     request_id: str,
+    donor_id: str,
     date_local: date,
     current_user: dict,
 ):
@@ -350,6 +368,11 @@ def get_available_time_ranges_for_request_controller(
 
     if not request_id or not request_id.strip():
         raise HTTPException(status_code=400, detail="request_id is required")
+
+    if not donor_id or not donor_id.strip():
+        raise HTTPException(status_code=400, detail="donor_id is required")
+
+    _validate_donor_can_book(donor_id)
 
     return list_available_time_ranges_for_request_service(
         request_id=request_id,
@@ -359,6 +382,7 @@ def get_available_time_ranges_for_request_controller(
 
 def get_available_slots_for_request_controller(
     request_id: str,
+    donor_id: str,
     date_local: date,
     time_range: str | None,
     limit: int,
@@ -370,11 +394,16 @@ def get_available_slots_for_request_controller(
     if not request_id or not request_id.strip():
         raise HTTPException(status_code=400, detail="request_id is required")
 
+    if not donor_id or not donor_id.strip():
+        raise HTTPException(status_code=400, detail="donor_id is required")
+
     if limit <= 0:
         raise HTTPException(status_code=400, detail="limit must be > 0")
 
     if offset < 0:
         raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    _validate_donor_can_book(donor_id)
 
     return list_available_slots_for_request_service(
         request_id=request_id,

@@ -48,11 +48,13 @@ async def get_month_window_appointments_endpoint(current_user: dict = Depends(ge
 @router.get("/request/{request_id}/available-days")
 async def get_available_days_for_request_endpoint(
     request_id: str,
+    donor_id: str,
     days_ahead: int = 14,
     current_user: dict = Depends(get_current_user),
 ):
     return get_available_days_for_request_controller(
         request_id=request_id,
+        donor_id=donor_id,
         days_ahead=days_ahead,
         current_user=current_user,
     )
@@ -61,11 +63,13 @@ async def get_available_days_for_request_endpoint(
 @router.get("/request/{request_id}/available-time-ranges")
 async def get_available_time_ranges_for_request_endpoint(
     request_id: str,
+    donor_id: str,
     date_local: date,
     current_user: dict = Depends(get_current_user),
 ):
     return get_available_time_ranges_for_request_controller(
         request_id=request_id,
+        donor_id=donor_id,
         date_local=date_local,
         current_user=current_user,
     )
@@ -74,6 +78,7 @@ async def get_available_time_ranges_for_request_endpoint(
 @router.get("/request/{request_id}/available-slots")
 async def get_available_slots_for_request_endpoint(
     request_id: str,
+    donor_id: str,
     date_local: date,
     time_range: str | None = None,
     limit: int = 8,
@@ -82,6 +87,7 @@ async def get_available_slots_for_request_endpoint(
 ):
     return get_available_slots_for_request_controller(
         request_id=request_id,
+        donor_id=donor_id,
         date_local=date_local,
         time_range=time_range,
         limit=limit,

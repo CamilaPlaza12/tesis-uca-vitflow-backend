@@ -18,6 +18,7 @@ from app.api.v1.services.donor_opportunity_service import (
     get_nearby_donation_opportunities_for_donor_service,
     get_campaigns_for_donor_service,
 )
+from app.api.v1.services.appointment_service import donor_has_active_appointment_service
 
 
 def _require_auth(current_user: dict):
@@ -93,6 +94,32 @@ def get_donor_by_dni_controller(dni: str, current_user: dict):
         donor = get_donor_by_dni_service(normalized)
         if not donor:
             raise HTTPException(status_code=404, detail="Donor not found")
+
+        donor_id = donor.get("id")
+        donor_dni = donor.get("dni")
+
+        evaluation = None
+        if donor_id:
+            evaluation = evaluate_donor_eligibility_service(donor_id)
+
+        eligibility_status = (
+            evaluation.get("status")
+            if isinstance(evaluation, dict) and evaluation.get("status")
+            else donor.get("eligibility_status")
+        )
+
+        has_active_appointment = donor_has_active_appointment_service(donor_id, donor_dni)
+        can_book = eligibility_status == "APT" and not has_active_appointment
+
+        booking_block_reason = None
+        if has_active_appointment:
+            booking_block_reason = "ACTIVE_APPOINTMENT"
+        elif eligibility_status != "APT":
+            booking_block_reason = "NOT_APT"
+
+        donor["has_active_appointment"] = has_active_appointment
+        donor["can_book"] = can_book
+        donor["booking_block_reason"] = booking_block_reason
 
         return donor
     except HTTPException:
