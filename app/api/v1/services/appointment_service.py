@@ -10,8 +10,22 @@ from app.api.v1.services.blood_bank_service import add_blood_units_by_group_serv
 from app.api.v1.services.blood_bank_service import ensure_auto_request_if_low_service
 
 HOSPITAL_REQUESTS_COLLECTION = "hospital_requests"
+HOSPITALS_COLLECTION = "hospitals"
 DONATION_UNITS_PER_COMPLETED_APPOINTMENT = 0.45
 ACTIVE_APPOINTMENT_STATUSES = {"PROGRAMADO", "CONFIRMADO"}
+
+
+def _get_hospital_name(hospital_id: str | None) -> str | None:
+    hospital_id = (hospital_id or "").strip()
+    if not hospital_id:
+        return None
+
+    snap = db.collection(HOSPITALS_COLLECTION).document(hospital_id).get()
+    if not snap.exists:
+        return None
+
+    data = snap.to_dict() or {}
+    return data.get("name")
 
 
 def get_appointments_service(hospital_id: str):
@@ -46,6 +60,18 @@ def get_appointment_by_id_service(hospital_id: str, appointment_id: str):
     return data
 
 
+def get_appointment_any_by_id_service(appointment_id: str):
+    doc_ref = db.collection("appointments").document(appointment_id)
+    snap = doc_ref.get()
+
+    if not snap.exists:
+        return None
+
+    data = snap.to_dict() or {}
+    data["id"] = snap.id
+    return data
+
+
 def donor_has_active_appointment_service(donor_id: str, donor_dni: str | None = None) -> bool:
     donor_id = (donor_id or "").strip()
     donor_dni = (donor_dni or "").strip()
@@ -73,6 +99,34 @@ def donor_has_active_appointment_service(donor_id: str, donor_dni: str | None = 
                 return True
 
     return False
+
+
+def get_active_appointment_by_dni_service(dni: str):
+    normalized_dni = (dni or "").strip()
+    if not normalized_dni:
+        return None
+
+    docs = (
+        db.collection("appointments")
+        .where("donor.dni", "==", normalized_dni)
+        .stream()
+    )
+
+    candidates = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        if data.get("status") not in ACTIVE_APPOINTMENT_STATUSES:
+            continue
+
+        data["id"] = doc.id
+        data["hospital_name"] = _get_hospital_name(data.get("hospital_id"))
+        candidates.append(data)
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: (x.get("date_local", ""), x.get("time_local", "")))
+    return candidates[0]
 
 
 def create_appointment_manual_service(hospital_id: str, appointment: AppointmentCreate):
@@ -139,6 +193,20 @@ def update_appointment_status_service(hospital_id: str, appointment_id: str, new
     if data.get("hospital_id") != hospital_id:
         return None
 
+    doc_ref.update({"status": new_status})
+    data["status"] = new_status
+    data["id"] = appointment_id
+    return data
+
+
+def update_appointment_status_any_service(appointment_id: str, new_status: str):
+    doc_ref = db.collection("appointments").document(appointment_id)
+    snap = doc_ref.get()
+
+    if not snap.exists:
+        return None
+
+    data = snap.to_dict() or {}
     doc_ref.update({"status": new_status})
     data["status"] = new_status
     data["id"] = appointment_id
@@ -224,6 +292,55 @@ def reschedule_appointment_with_slots_service(
     data = snap.to_dict() or {}
     if data.get("hospital_id") != hospital_id:
         return None
+
+    old_date_str = data.get("date_local")
+    old_time_str = data.get("time_local")
+
+    if not old_date_str or not old_time_str:
+        raise HTTPException(status_code=409, detail="Appointment has no date/time to reschedule")
+
+    old_date = datetime.fromisoformat(old_date_str).date()
+    new_date = body.date_local
+    new_time = body.time_local
+
+    new_slot_key = reserve_slot_service(hospital_id, new_date, new_time)
+
+    try:
+        release_slot_service(hospital_id, old_date, old_time_str)
+        doc_ref.update({
+            "date_local": new_date.isoformat(),
+            "time_local": new_time,
+            "slot_key": new_slot_key,
+        })
+    except Exception:
+        try:
+            release_slot_service(hospital_id, new_date, new_time)
+        except Exception:
+            pass
+        raise
+
+    data["date_local"] = new_date.isoformat()
+    data["time_local"] = new_time
+    data["slot_key"] = new_slot_key
+    data["id"] = appointment_id
+    return data
+
+
+def reschedule_appointment_any_with_slots_service(
+    appointment_id: str,
+    body: RescheduleAppointmentRequest,
+):
+    doc_ref = db.collection("appointments").document(appointment_id)
+    snap = doc_ref.get()
+
+    if not snap.exists:
+        return None
+
+    data = snap.to_dict() or {}
+
+    hospital_id = data.get("hospital_id")
+    if not hospital_id:
+        raise HTTPException(status_code=409, detail="Appointment has no hospital_id")
 
     old_date_str = data.get("date_local")
     old_time_str = data.get("time_local")

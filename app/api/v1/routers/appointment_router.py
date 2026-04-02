@@ -21,6 +21,7 @@ from app.api.v1.controllers.appointment_controller import (
     get_available_days_for_request_controller,
     get_available_time_ranges_for_request_controller,
     get_available_slots_for_request_controller,
+    get_active_appointment_by_dni_controller,
 )
 
 router = APIRouter(prefix="/appointments", tags=["Appointments"])
@@ -45,17 +46,27 @@ async def get_month_window_appointments_endpoint(current_user: dict = Depends(ge
     return get_month_window_appointments_controller(current_user)
 
 
+@router.get("/by-dni/{dni}/active")
+async def get_active_appointment_by_dni_endpoint(
+    dni: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_active_appointment_by_dni_controller(dni, current_user)
+
+
 @router.get("/request/{request_id}/available-days")
 async def get_available_days_for_request_endpoint(
     request_id: str,
     donor_id: str,
     days_ahead: int = 14,
+    allow_existing_active: bool = False,
     current_user: dict = Depends(get_current_user),
 ):
     return get_available_days_for_request_controller(
         request_id=request_id,
         donor_id=donor_id,
         days_ahead=days_ahead,
+        allow_existing_active=allow_existing_active,
         current_user=current_user,
     )
 
@@ -65,12 +76,14 @@ async def get_available_time_ranges_for_request_endpoint(
     request_id: str,
     donor_id: str,
     date_local: date,
+    allow_existing_active: bool = False,
     current_user: dict = Depends(get_current_user),
 ):
     return get_available_time_ranges_for_request_controller(
         request_id=request_id,
         donor_id=donor_id,
         date_local=date_local,
+        allow_existing_active=allow_existing_active,
         current_user=current_user,
     )
 
@@ -83,6 +96,7 @@ async def get_available_slots_for_request_endpoint(
     time_range: str | None = None,
     limit: int = 8,
     offset: int = 0,
+    allow_existing_active: bool = False,
     current_user: dict = Depends(get_current_user),
 ):
     return get_available_slots_for_request_controller(
@@ -92,6 +106,7 @@ async def get_available_slots_for_request_endpoint(
         time_range=time_range,
         limit=limit,
         offset=offset,
+        allow_existing_active=allow_existing_active,
         current_user=current_user,
     )
 

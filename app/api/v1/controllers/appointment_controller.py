@@ -12,13 +12,17 @@ from app.schemas.appointment_schema import (
 from app.api.v1.services.appointment_service import (
     get_appointments_service,
     get_appointment_by_id_service,
+    get_appointment_any_by_id_service,
     create_appointment_manual_service,
     create_appointment_from_vito_service,
     search_appointments_by_range_service,
     update_appointment_status_service,
+    update_appointment_status_any_service,
     apply_completion_side_effects_service,
     reschedule_appointment_with_slots_service,
+    reschedule_appointment_any_with_slots_service,
     donor_has_active_appointment_service,
+    get_active_appointment_by_dni_service,
 )
 from app.api.v1.services.available_slots_service import (
     release_slot_service,
@@ -30,7 +34,10 @@ from app.api.v1.services.hospital_request_service import (
     get_hospital_request_by_id_service,
     get_hospital_request_any_service,
 )
-from app.api.v1.services.donor_service import get_donor_by_id_service
+from app.api.v1.services.donor_service import (
+    get_donor_by_id_service,
+    get_donor_by_dni_service,
+)
 from app.api.v1.services.donor_eligibility_service import evaluate_donor_eligibility_service
 from app.utils.auth_utils import resolve_hospital_id
 
@@ -49,14 +56,41 @@ def _require_auth(current_user: dict):
         )
 
 
-def _validate_donor_can_book(donor_id: str):
+def _is_internal_auth(current_user: dict) -> bool:
+    if not current_user:
+        return False
+
+    auth_type = (current_user.get("auth_type") or "").strip().upper()
+    if auth_type == "INTERNAL":
+        return True
+
+    role = (current_user.get("role") or "").strip().upper()
+    if role == "INTERNAL":
+        return True
+
+    uid = (current_user.get("uid") or "").strip().lower()
+    return uid in {"internal", "internal_service", "vito_internal"}
+
+
+def _get_donor_or_404(donor_id: str):
     donor = get_donor_by_id_service(donor_id)
     if not donor:
         raise HTTPException(status_code=404, detail="Donor not found")
+    return donor
+
+
+def _validate_donor_is_apt(donor_id: str):
+    donor = _get_donor_or_404(donor_id)
 
     evaluation = evaluate_donor_eligibility_service(donor_id)
     if not evaluation or evaluation.get("status") != "APT":
         raise HTTPException(status_code=409, detail="Donor is not eligible to book an appointment")
+
+    return donor
+
+
+def _validate_donor_can_book(donor_id: str):
+    donor = _validate_donor_is_apt(donor_id)
 
     donor_dni = (donor.get("dni") or "").strip()
     if donor_has_active_appointment_service(donor_id, donor_dni):
@@ -85,6 +119,24 @@ def get_appointment_by_id_controller(appointment_id: str, current_user: dict):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Appointment not found",
         )
+
+    return appointment
+
+
+def get_active_appointment_by_dni_controller(dni: str, current_user: dict):
+    _require_auth(current_user)
+
+    normalized = (dni or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="dni is required")
+
+    donor = get_donor_by_dni_service(normalized)
+    if not donor:
+        raise HTTPException(status_code=404, detail="Donor not found")
+
+    appointment = get_active_appointment_by_dni_service(normalized)
+    if not appointment:
+        raise HTTPException(status_code=404, detail="Active appointment not found")
 
     return appointment
 
@@ -210,10 +262,47 @@ def _validate_status_transition(current_status: str, new_status: str):
 
 
 def update_appointment_status_controller(appointment_id: str, body: UpdateAppointmentStatusRequest, current_user: dict):
-    hospital_id = resolve_hospital_id(current_user)
+    _require_auth(current_user)
 
     if not appointment_id or not appointment_id.strip():
         raise HTTPException(status_code=400, detail="appointment_id is required")
+
+    if _is_internal_auth(current_user):
+        existing = get_appointment_any_by_id_service(appointment_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Appointment not found")
+
+        current_status = existing.get("status")
+        new_status = body.status
+
+        if current_status == new_status:
+            return existing
+
+        if not current_status:
+            raise HTTPException(status_code=409, detail="Appointment has no status")
+
+        _validate_status_transition(current_status, new_status)
+
+        updated = update_appointment_status_any_service(appointment_id, new_status)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Appointment not found")
+
+        if new_status == "CANCELADO" and current_status in {"PROGRAMADO", "CONFIRMADO"}:
+            date_str = existing.get("date_local")
+            time_str = existing.get("time_local")
+            hospital_id = existing.get("hospital_id")
+            if date_str and time_str and hospital_id:
+                old_date = datetime.fromisoformat(date_str).date()
+                release_slot_service(hospital_id, old_date, time_str)
+
+        if new_status == "COMPLETADO" and current_status != "COMPLETADO":
+            hospital_id = updated.get("hospital_id")
+            if hospital_id:
+                apply_completion_side_effects_service(hospital_id, updated)
+
+        return updated
+
+    hospital_id = resolve_hospital_id(current_user)
 
     existing = get_appointment_by_id_service(hospital_id, appointment_id)
     if not existing:
@@ -248,10 +337,47 @@ def update_appointment_status_controller(appointment_id: str, body: UpdateAppoin
 
 
 def reschedule_appointment_controller(appointment_id: str, body: RescheduleAppointmentRequest, current_user: dict):
-    hospital_id = resolve_hospital_id(current_user)
+    _require_auth(current_user)
 
     if not appointment_id or not appointment_id.strip():
         raise HTTPException(status_code=400, detail="appointment_id is required")
+
+    if _is_internal_auth(current_user):
+        existing = get_appointment_any_by_id_service(appointment_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Appointment not found")
+
+        if existing.get("status") in {"CANCELADO", "COMPLETADO", "NO_PRESENTADO"}:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot reschedule appointment in state {existing.get('status')}",
+            )
+
+        try:
+            hh, mm = body.time_local.split(":")
+            t = time(int(hh), int(mm))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid time_local format")
+
+        if t.minute % 5 != 0:
+            raise HTTPException(
+                status_code=400,
+                detail="time_local must be in 5-minute intervals (00, 05, 10, ..., 55)",
+            )
+
+        now_ba = datetime.now(BA_TZ)
+        new_dt_ba = datetime.combine(body.date_local, t).replace(tzinfo=BA_TZ)
+
+        if new_dt_ba < now_ba:
+            raise HTTPException(status_code=400, detail="Rescheduled datetime cannot be in the past")
+
+        updated = reschedule_appointment_any_with_slots_service(appointment_id, body)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Appointment not found")
+
+        return updated
+
+    hospital_id = resolve_hospital_id(current_user)
 
     existing = get_appointment_by_id_service(hospital_id, appointment_id)
     if not existing:
@@ -337,6 +463,7 @@ def get_available_days_for_request_controller(
     request_id: str,
     donor_id: str,
     days_ahead: int,
+    allow_existing_active: bool,
     current_user: dict,
 ):
     _require_auth(current_user)
@@ -350,7 +477,10 @@ def get_available_days_for_request_controller(
     if days_ahead <= 0:
         raise HTTPException(status_code=400, detail="days_ahead must be > 0")
 
-    _validate_donor_can_book(donor_id)
+    if allow_existing_active:
+        _validate_donor_is_apt(donor_id)
+    else:
+        _validate_donor_can_book(donor_id)
 
     return list_available_days_for_request_service(
         request_id=request_id,
@@ -362,6 +492,7 @@ def get_available_time_ranges_for_request_controller(
     request_id: str,
     donor_id: str,
     date_local: date,
+    allow_existing_active: bool,
     current_user: dict,
 ):
     _require_auth(current_user)
@@ -372,7 +503,10 @@ def get_available_time_ranges_for_request_controller(
     if not donor_id or not donor_id.strip():
         raise HTTPException(status_code=400, detail="donor_id is required")
 
-    _validate_donor_can_book(donor_id)
+    if allow_existing_active:
+        _validate_donor_is_apt(donor_id)
+    else:
+        _validate_donor_can_book(donor_id)
 
     return list_available_time_ranges_for_request_service(
         request_id=request_id,
@@ -387,6 +521,7 @@ def get_available_slots_for_request_controller(
     time_range: str | None,
     limit: int,
     offset: int,
+    allow_existing_active: bool,
     current_user: dict,
 ):
     _require_auth(current_user)
@@ -403,7 +538,10 @@ def get_available_slots_for_request_controller(
     if offset < 0:
         raise HTTPException(status_code=400, detail="offset must be >= 0")
 
-    _validate_donor_can_book(donor_id)
+    if allow_existing_active:
+        _validate_donor_is_apt(donor_id)
+    else:
+        _validate_donor_can_book(donor_id)
 
     return list_available_slots_for_request_service(
         request_id=request_id,
