@@ -97,6 +97,7 @@ def get_donor_by_dni_controller(dni: str, current_user: dict):
 
         donor_id = donor.get("id")
         donor_dni = donor.get("dni")
+        donor_enabled = donor.get("is_enabled", True)
 
         evaluation = None
         if donor_id:
@@ -109,10 +110,12 @@ def get_donor_by_dni_controller(dni: str, current_user: dict):
         )
 
         has_active_appointment = donor_has_active_appointment_service(donor_id, donor_dni)
-        can_book = eligibility_status == "APT" and not has_active_appointment
+        can_book = donor_enabled and eligibility_status == "APT" and not has_active_appointment
 
         booking_block_reason = None
-        if has_active_appointment:
+        if not donor_enabled:
+            booking_block_reason = "DONOR_DISABLED"
+        elif has_active_appointment:
             booking_block_reason = "ACTIVE_APPOINTMENT"
         elif eligibility_status != "APT":
             booking_block_reason = "NOT_APT"
@@ -120,6 +123,7 @@ def get_donor_by_dni_controller(dni: str, current_user: dict):
         donor["has_active_appointment"] = has_active_appointment
         donor["can_book"] = can_book
         donor["booking_block_reason"] = booking_block_reason
+        donor["is_enabled"] = donor_enabled
 
         return donor
     except HTTPException:

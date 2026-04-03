@@ -50,6 +50,10 @@ def _with_defaults(donor_dict: dict) -> dict:
     donor_dict.setdefault("eligibility_checked_at", None)
     donor_dict.setdefault("eligibility_reasons", [])
 
+    donor_dict.setdefault("is_subscribed", True)
+    donor_dict.setdefault("has_consent", True)
+    donor_dict.setdefault("is_enabled", True)
+
     return donor_dict
 
 
@@ -167,6 +171,10 @@ def get_donors_by_blood_group_service(blood_group: str):
             data["id"] = doc.id
             data = _with_defaults(data)
             data = _attach_age(data)
+
+            if not data.get("is_enabled", True):
+                continue
+
             donors.append(data)
 
         print(f"[DONOR_SERVICE] total donors blood_group={blood_group}: {len(donors)}")
@@ -198,6 +206,7 @@ def create_donor_service(body: DonorCreate):
         data["eligibility_available_from"] = None
         data["eligibility_checked_at"] = None
         data["eligibility_reasons"] = []
+        data["is_enabled"] = True
 
         res = db.collection(COLLECTION).add(data)
         doc_ref = res[1] if isinstance(res, (list, tuple)) and len(res) == 2 else res

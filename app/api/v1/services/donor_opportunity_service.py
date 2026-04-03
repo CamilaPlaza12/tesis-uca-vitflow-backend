@@ -73,6 +73,16 @@ def get_nearby_donation_opportunities_for_donor_service(dni: str, radius_km: flo
     if not donor:
         raise HTTPException(status_code=404, detail="Donor not found")
 
+    if not donor.get("is_enabled", True):
+        return {
+            "donor_id": donor.get("id"),
+            "dni": dni,
+            "eligibility_status": donor.get("eligibility_status"),
+            "total": 0,
+            "requests": [],
+            "booking_block_reason": "DONOR_DISABLED",
+        }
+
     donor_id = donor.get("id")
     evaluation = evaluate_donor_eligibility_service(donor_id)
     donor_status = evaluation.get("status") if evaluation else donor.get("eligibility_status")
@@ -143,6 +153,16 @@ def get_campaigns_for_donor_service(dni: str):
     donor = get_donor_by_dni_service(dni)
     if not donor:
         raise HTTPException(status_code=404, detail="Donor not found")
+
+    if not donor.get("is_enabled", True):
+        return {
+            "donor_id": donor.get("id"),
+            "dni": dni,
+            "eligibility_status": donor.get("eligibility_status"),
+            "total": 0,
+            "requests": [],
+            "booking_block_reason": "DONOR_DISABLED",
+        }
 
     donor_id = donor.get("id")
     evaluation = evaluate_donor_eligibility_service(donor_id)

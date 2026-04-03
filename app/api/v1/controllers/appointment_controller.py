@@ -79,8 +79,14 @@ def _get_donor_or_404(donor_id: str):
     return donor
 
 
+def _validate_donor_is_enabled(donor: dict):
+    if not donor.get("is_enabled", True):
+        raise HTTPException(status_code=409, detail="Donor is disabled")
+
+
 def _validate_donor_is_apt(donor_id: str):
     donor = _get_donor_or_404(donor_id)
+    _validate_donor_is_enabled(donor)
 
     evaluation = evaluate_donor_eligibility_service(donor_id)
     if not evaluation or evaluation.get("status") != "APT":

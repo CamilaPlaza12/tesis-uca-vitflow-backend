@@ -75,6 +75,7 @@ class DonorCreate(BaseModel):
 
     is_subscribed: bool = True
     has_consent: bool = True
+    is_enabled: bool = True
 
     has_fever_or_infection: bool = False
     has_active_fever_or_infection: Optional[bool] = None
@@ -136,6 +137,7 @@ class Donor(BaseModel):
 
     is_subscribed: bool
     has_consent: bool
+    is_enabled: bool
 
     has_fever_or_infection: bool = False
     has_active_fever_or_infection: Optional[bool] = None
@@ -169,3 +171,7 @@ class DonorUpdate(BaseModel):
     infection_resolved_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
     screening_updated_at: Optional[str] = None
+
+    is_subscribed: Optional[bool] = None
+    has_consent: Optional[bool] = None
+    is_enabled: Optional[bool] = None
