@@ -1,8 +1,13 @@
 from fastapi import HTTPException, status
-from app.firebase.firebase_client import db
 
 
 def resolve_hospital_id(current_user: dict) -> str:
+    """
+    Extrae el hospital_id del usuario autenticado.
+    El campo hospitalId es poblado por get_current_user() en security.py
+    a partir del documento users/{uid} en Firestore — nunca viene del frontend.
+    No realiza lecturas adicionales a Firestore: el dato ya está en current_user.
+    """
     uid = current_user.get("uid") if current_user else None
     if not uid:
         raise HTTPException(
@@ -10,15 +15,7 @@ def resolve_hospital_id(current_user: dict) -> str:
             detail="Invalid token: missing uid",
         )
 
-    user_snap = db.collection("users").document(uid).get()
-    if not user_snap.exists:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
-    user_data = user_snap.to_dict() or {}
-    hospital_id = (user_data.get("hospital_id") or user_data.get("hospitalId") or "").strip()
+    hospital_id = (current_user.get("hospitalId") or "").strip()
 
     if not hospital_id:
         raise HTTPException(
