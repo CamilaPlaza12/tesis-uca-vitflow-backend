@@ -1,7 +1,36 @@
 # BACKEND CHANGES — Refactorización de Stock por Componentes
 
 > **Audiencia:** equipo de frontend.  
-> **Última actualización:** 2026-04-11
+> **Última actualización:** 2026-04-12
+
+---
+
+## 0. Nuevo endpoint: totales disponibles
+
+### `GET /api/v1/stock/totales`
+
+Devuelve el conteo de unidades con `estado = "disponible"` en las tres
+colecciones (`globulos_rojos`, `plasma`, `plaquetas`) **del hospital del
+usuario autenticado** (leído del token, no del frontend).
+
+**Headers requeridos:**
+```
+Authorization: Bearer <token>
+```
+
+**Respuesta `200 OK`:**
+```json
+{
+  "total": 45,
+  "globulos_rojos": 20,
+  "plasma": 15,
+  "plaquetas": 10
+}
+```
+
+> Usar este endpoint para el contador de "unidades totales disponibles" del
+> home. El endpoint anterior (`/blood-bank`) devolvía datos del modelo viejo
+> y el número era incorrecto.
 
 ---
 
@@ -659,7 +688,164 @@ Sin parámetros. Devuelve el resumen del dashboard principal del hospital.
 
 ---
 
-## 8. Pendiente — no implementar todavía (renumerado desde §7)
+---
+
+## 8. Actualización 2026-04-12 — Múltiples unidades y historial de movimientos
+
+### 8.1 `POST /stock/{componente}/agregar` — ahora soporta múltiples unidades
+
+El endpoint ya **no devuelve un objeto único**, sino un **array** con todas las unidades creadas.
+
+**Body actualizado:**
+
+```json
+{
+  "blood_group": "A+",
+  "cantidad": 3
+}
+```
+
+| Campo       | Tipo   | Obligatorio | Descripción |
+|-------------|--------|-------------|-------------|
+| `blood_group` | string | sí | Grupo sanguíneo (enum §5) |
+| `cantidad`  | int    | no | Unidades a crear. Default: `1`. Máximo: `100`. |
+
+> `turno_id` y `donante_id` ya no forman parte de este body. Para cargas manuales no se asocian a un turno.
+
+**Respuesta `201 Created`:** array de `UnidadOut`
+
+```json
+[
+  {
+    "id": "abc1",
+    "hospital_id": "hospital_456",
+    "blood_group": "A+",
+    "fecha_creacion": "2026-04-12T10:00:00Z",
+    "fecha_vencimiento": "2026-05-24T10:00:00Z",
+    "estado": "disponible",
+    "turno_id": null,
+    "donante_id": null
+  },
+  {
+    "id": "abc2",
+    "blood_group": "A+",
+    "..."
+  }
+]
+```
+
+> El registro de historial se crea automáticamente — el frontend no tiene que hacer nada adicional.
+
+---
+
+### 8.2 `PATCH /stock/{componente}/retirar` — retiro de múltiples unidades
+
+**Nuevo endpoint.** Retira varias unidades en una sola operación.
+
+> El endpoint individual `PATCH /stock/{componente}/{id}/retirar` **sigue existiendo** y no fue modificado.
+
+```
+PATCH /api/v1/stock/globulos_rojos/retirar
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Body:**
+
+```json
+{
+  "unidad_ids": ["id1", "id2", "id3"],
+  "motivo": "transfusion",
+  "motivo_detalle": null
+}
+```
+
+| Campo          | Tipo           | Obligatorio | Descripción |
+|----------------|----------------|-------------|-------------|
+| `unidad_ids`   | array\<string\> | sí          | Al menos 1 ID. Todas deben pertenecer al hospital del token. |
+| `motivo`       | string         | no          | `transfusion` \| `trasplante` \| `operacion` \| `otro` |
+| `motivo_detalle` | string       | condicional | Obligatorio si `motivo == "otro"` |
+
+**Respuesta `200 OK`:** array de `UnidadOut` con `estado: "usado"`.
+
+> Si alguna unidad no existe o pertenece a otro hospital, devuelve `404` o `403` y ninguna unidad es modificada hasta ese punto (no hay transacción atómica — se procesan en orden).
+
+> El registro de historial se crea automáticamente.
+
+---
+
+### 8.3 `GET /stock/historial` — historial de movimientos
+
+Lista todos los movimientos de stock del hospital autenticado, ordenados por fecha descendente.
+
+```
+GET /api/v1/stock/historial
+Authorization: Bearer <token>
+```
+
+**Query params opcionales:**
+
+| Parámetro   | Valores válidos | Descripción |
+|-------------|-----------------|-------------|
+| `componente` | `globulos_rojos` \| `plasma` \| `plaquetas` | Filtrar por componente |
+| `accion`    | `agrego` \| `retiro` | Filtrar por tipo de movimiento |
+| `desde`     | ISO date, ej: `2026-04-01` | Fecha de inicio (inclusive) |
+| `hasta`     | ISO date, ej: `2026-04-30` | Fecha de fin (inclusive) |
+
+**Respuesta `200 OK`:**
+
+```json
+[
+  {
+    "id": "mov_001",
+    "hospital_id": "hospital_456",
+    "usuario_id": "uid_del_usuario",
+    "usuario_nombre": "María López",
+    "accion": "retiro",
+    "componente": "globulos_rojos",
+    "blood_group": "A+",
+    "unidades_ids": ["id1", "id2"],
+    "cantidad": 2,
+    "motivo": "transfusion",
+    "motivo_detalle": null,
+    "fecha": "2026-04-12T14:30:00Z"
+  }
+]
+```
+
+> `usuario_nombre` se construye automáticamente del perfil del usuario autenticado (`firstName + lastName`).
+
+**Cuándo se genera un registro automáticamente:**
+
+| Acción | `accion` en historial | Notas |
+|--------|-----------------------|-------|
+| `POST /stock/{componente}/agregar` | `"agrego"` | Un registro por llamada, con todas las unidades creadas |
+| `PATCH /stock/{componente}/retirar` | `"retiro"` | Un registro por llamada, con todas las unidades retiradas |
+| `POST /donaciones/confirmar` | `"agrego"` | Un registro por cada componente en `body.componentes` |
+
+> El endpoint individual `PATCH /{componente}/{id}/retirar` **no** genera historial (es el endpoint legacy). Para historial usar el nuevo bulk.
+
+**Colección Firestore nueva:** `stock_historial`
+
+```json
+{
+  "hospital_id": "hospital_456",
+  "usuario_id": "uid_abc",
+  "usuario_nombre": "María López",
+  "accion": "agrego",
+  "componente": "plasma",
+  "blood_group": "O+",
+  "unidades_ids": ["pl_001", "pl_002", "pl_003"],
+  "cantidad": 3,
+  "motivo": null,
+  "motivo_detalle": null,
+  "fecha": "2026-04-12T10:00:00Z"
+}
+```
+
+---
+
+## 9. Pendiente — no implementar todavía (renumerado desde §7)
 
 Las siguientes features están marcadas como TODO en el código y **no están implementadas**.
 El frontend no debe construir pantallas para estas funcionalidades aún:

@@ -6,6 +6,8 @@ from app.core.security import get_current_user
 from app.schemas.appointment_schema import (
     AppointmentCreate,
     AppointmentCreateFromVito,
+    ConfirmarAsistenciaRequest,
+    ConfirmarAsistenciaOut,
     UpdateAppointmentStatusRequest,
     RescheduleAppointmentRequest,
 )
@@ -22,6 +24,7 @@ from app.api.v1.controllers.appointment_controller import (
     get_available_time_ranges_for_request_controller,
     get_available_slots_for_request_controller,
     get_active_appointment_by_dni_controller,
+    confirmar_asistencia_controller,
 )
 
 router = APIRouter(prefix="/appointments", tags=["Appointments"])
@@ -151,3 +154,17 @@ async def reschedule_appointment_endpoint(
     current_user: dict = Depends(get_current_user),
 ):
     return reschedule_appointment_controller(appointment_id, body, current_user)
+
+
+@router.post("/{appointment_id}/confirmar-asistencia", response_model=ConfirmarAsistenciaOut, status_code=200)
+async def confirmar_asistencia_endpoint(
+    appointment_id: str,
+    body: ConfirmarAsistenciaRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Marcar asistencia del donante: cambia el turno a COMPLETADO y registra
+    los componentes obtenidos creando una unidad por cada uno en stock.
+    Acepta el turno en estado PROGRAMADO o CONFIRMADO.
+    """
+    return confirmar_asistencia_controller(appointment_id, body, current_user)

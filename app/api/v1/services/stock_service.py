@@ -9,7 +9,9 @@ from app.schemas.stock_schema import (
     BloodGroup,
     Componente,
     EstadoUnidad,
+    HistorialOut,
     InicializarUmbralesOut,
+    TotalesOut,
     UmbralCreate,
     UmbralPatch,
     UmbralOut,
@@ -56,6 +58,13 @@ _TODOS_LOS_GRUPOS_LIST = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 # Colección: stock_umbrales
 # Campos: hospital_id ASC, componente ASC, blood_group ASC
 
+COLECCION_HISTORIAL = "stock_historial"
+
+# FIRESTORE INDEX REQUERIDO para historial con filtro de rango en fecha:
+# Colección: stock_historial
+# Campos: hospital_id ASC, fecha DESC
+# (Si se agrega filtro por componente: hospital_id ASC, componente ASC, fecha DESC)
+
 COLECCIONES_COMPONENTE = {
     "globulos_rojos": "globulos_rojos",
     "plasma": "plasma",
@@ -85,6 +94,8 @@ def _doc_to_unidad(doc) -> UnidadOut:
         estado=data["estado"],
         turno_id=data.get("turno_id"),
         donante_id=data.get("donante_id"),
+        motivo=data.get("motivo"),
+        motivo_detalle=data.get("motivo_detalle"),
     )
 
 
@@ -204,7 +215,13 @@ def _verificar_ownership_unidad(doc, componente: str, unidad_id: str, hospital_i
         )
 
 
-def marcar_usado_service(componente: str, unidad_id: str, hospital_id: str) -> UnidadOut:
+def marcar_usado_service(
+    componente: str,
+    unidad_id: str,
+    hospital_id: str,
+    motivo: Optional[str] = None,
+    motivo_detalle: Optional[str] = None,
+) -> UnidadOut:
     """Marca una unidad como 'usado'. Verifica que pertenezca al hospital autenticado."""
     ref = _col(componente).document(unidad_id)
     doc = ref.get()
@@ -214,7 +231,12 @@ def marcar_usado_service(componente: str, unidad_id: str, hospital_id: str) -> U
             detail=f"Unidad {unidad_id} no encontrada en {componente}",
         )
     _verificar_ownership_unidad(doc, componente, unidad_id, hospital_id)
-    ref.update({"estado": "usado"})
+    patch: dict = {"estado": "usado"}
+    if motivo:
+        patch["motivo"] = motivo
+    if motivo_detalle:
+        patch["motivo_detalle"] = motivo_detalle
+    ref.update(patch)
     return _doc_to_unidad(ref.get())
 
 
@@ -244,6 +266,123 @@ def listar_disponibles_service(
     if blood_group:
         query = query.where("blood_group", "==", blood_group)
     return [_doc_to_unidad(d) for d in query.stream()]
+
+
+def agregar_bulk_service(
+    componente: str,
+    hospital_id: str,
+    blood_group: str,
+    cantidad: int,
+) -> List[UnidadOut]:
+    """Crea N unidades del mismo componente y grupo sanguíneo. Devuelve la lista creada."""
+    ahora = datetime.now(tz=timezone.utc)
+    dias = VIDA_UTIL_DIAS[componente]
+    vencimiento = ahora + timedelta(days=dias)
+
+    payload = {
+        "hospital_id": hospital_id,
+        "blood_group": blood_group,
+        "fecha_creacion": ahora,
+        "fecha_vencimiento": vencimiento,
+        "estado": "disponible",
+        "turno_id": None,
+        "donante_id": None,
+    }
+
+    unidades = []
+    for _ in range(cantidad):
+        _, ref = _col(componente).add(payload)
+        doc = ref.get()
+        unidades.append(_doc_to_unidad(doc))
+
+    return unidades
+
+
+def marcar_usado_bulk_service(
+    componente: str,
+    unidad_ids: List[str],
+    hospital_id: str,
+    motivo: Optional[str] = None,
+    motivo_detalle: Optional[str] = None,
+) -> List[UnidadOut]:
+    """Marca múltiples unidades como 'usado'. Verifica ownership de cada una."""
+    return [
+        marcar_usado_service(componente, uid, hospital_id, motivo, motivo_detalle)
+        for uid in unidad_ids
+    ]
+
+
+# ─── Historial de movimientos ─────────────────────────────────────────────────
+
+def registrar_historial_service(
+    hospital_id: str,
+    usuario_id: str,
+    usuario_nombre: str,
+    accion: str,
+    componente: str,
+    blood_group: str,
+    unidades_ids: List[str],
+    cantidad: int,
+    motivo: Optional[str] = None,
+    motivo_detalle: Optional[str] = None,
+) -> None:
+    """Registra un movimiento de stock en la colección stock_historial."""
+    db.collection(COLECCION_HISTORIAL).add({
+        "hospital_id": hospital_id,
+        "usuario_id": usuario_id,
+        "usuario_nombre": usuario_nombre,
+        "accion": accion,
+        "componente": componente,
+        "blood_group": blood_group,
+        "unidades_ids": unidades_ids,
+        "cantidad": cantidad,
+        "motivo": motivo,
+        "motivo_detalle": motivo_detalle,
+        "fecha": datetime.now(tz=timezone.utc),
+    })
+
+
+def listar_historial_service(
+    hospital_id: str,
+    componente: Optional[str] = None,
+    accion: Optional[str] = None,
+    desde: Optional[datetime] = None,
+    hasta: Optional[datetime] = None,
+) -> List[HistorialOut]:
+    """Lista el historial de movimientos del hospital, ordenado por fecha descendente."""
+    query = db.collection(COLECCION_HISTORIAL).where("hospital_id", "==", hospital_id)
+
+    if componente:
+        query = query.where("componente", "==", componente)
+    if accion:
+        query = query.where("accion", "==", accion)
+    if desde:
+        query = query.where("fecha", ">=", desde)
+    if hasta:
+        query = query.where("fecha", "<=", hasta)
+
+    docs = list(query.stream())
+
+    resultado = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        resultado.append(HistorialOut(
+            id=doc.id,
+            hospital_id=data["hospital_id"],
+            usuario_id=data["usuario_id"],
+            usuario_nombre=data["usuario_nombre"],
+            accion=data["accion"],
+            componente=data["componente"],
+            blood_group=data["blood_group"],
+            unidades_ids=data.get("unidades_ids", []),
+            cantidad=data["cantidad"],
+            motivo=data.get("motivo"),
+            motivo_detalle=data.get("motivo_detalle"),
+            fecha=data["fecha"],
+        ))
+
+    resultado.sort(key=lambda h: h.fecha, reverse=True)
+    return resultado
 
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
@@ -277,6 +416,28 @@ def dashboard_resumen_service(hospital_id: str) -> DashboardResumenOut:
         resultado[componente] = conteo
 
     return DashboardResumenOut(**resultado)
+
+
+# ─── Totales disponibles ─────────────────────────────────────────────────────
+
+def totales_disponibles_service(hospital_id: str) -> TotalesOut:
+    """Cuenta documentos con estado='disponible' en las tres colecciones del hospital."""
+    conteos = {}
+    for componente in ("globulos_rojos", "plasma", "plaquetas"):
+        docs = (
+            _col(componente)
+            .where("hospital_id", "==", hospital_id)
+            .where("estado", "==", "disponible")
+            .stream()
+        )
+        conteos[componente] = sum(1 for _ in docs)
+
+    return TotalesOut(
+        total=sum(conteos.values()),
+        globulos_rojos=conteos["globulos_rojos"],
+        plasma=conteos["plasma"],
+        plaquetas=conteos["plaquetas"],
+    )
 
 
 # ─── Umbrales ─────────────────────────────────────────────────────────────────

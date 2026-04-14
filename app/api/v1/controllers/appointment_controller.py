@@ -6,6 +6,9 @@ from fastapi import HTTPException, status
 from app.schemas.appointment_schema import (
     AppointmentCreate,
     AppointmentCreateFromVito,
+    ConfirmarAsistenciaRequest,
+    ConfirmarAsistenciaOut,
+    UnidadResumen,
     RescheduleAppointmentRequest,
     UpdateAppointmentStatusRequest,
 )
@@ -39,6 +42,8 @@ from app.api.v1.services.donor_service import (
     get_donor_by_dni_service,
 )
 from app.api.v1.services.donor_eligibility_service import evaluate_donor_eligibility_service
+from app.api.v1.services.stock_service import crear_unidad_service
+from app.schemas.stock_schema import UnidadCreate
 from app.utils.auth_utils import resolve_hospital_id
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
@@ -555,4 +560,69 @@ def get_available_slots_for_request_controller(
         time_range=time_range,
         limit=limit,
         offset=offset,
+    )
+
+
+def confirmar_asistencia_controller(
+    appointment_id: str,
+    body: ConfirmarAsistenciaRequest,
+    current_user: dict,
+) -> ConfirmarAsistenciaOut:
+    """
+    Acción unificada de "Marcar asistencia":
+    1. Cambia el turno a COMPLETADO (desde PROGRAMADO o CONFIRMADO).
+    2. Crea una unidad de componente por cada ítem en body.componentes.
+    3. Dispara los side-effects de completado (actualiza collected_units del pedido).
+    """
+    _require_auth(current_user)
+    hospital_id = resolve_hospital_id(current_user)
+
+    if not appointment_id or not appointment_id.strip():
+        raise HTTPException(status_code=400, detail="appointment_id is required")
+
+    existing = get_appointment_by_id_service(hospital_id, appointment_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    current_status = existing.get("status")
+    if current_status in {"CANCELADO", "COMPLETADO", "NO_PRESENTADO"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"No se puede marcar asistencia: el turno está en estado {current_status}",
+        )
+
+    # Cambiar estado a COMPLETADO
+    updated = update_appointment_status_service(hospital_id, appointment_id, "COMPLETADO")
+    if not updated:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    # Side-effects: actualizar collected_units en el pedido hospitalario
+    apply_completion_side_effects_service(hospital_id, updated)
+
+    # Crear una unidad por cada componente seleccionado
+    donante_id = existing.get("donor_id")  # presente en turnos Vito, None en manuales
+    unidades_creadas = []
+
+    for componente in body.componentes:
+        unidad = crear_unidad_service(
+            componente,
+            hospital_id,
+            UnidadCreate(
+                blood_group=body.blood_group,
+                turno_id=appointment_id,
+                donante_id=donante_id,
+            ),
+        )
+        unidades_creadas.append(UnidadResumen(
+            id=unidad.id,
+            componente=componente,
+            blood_group=unidad.blood_group,
+            fecha_vencimiento=unidad.fecha_vencimiento.isoformat(),
+            estado=unidad.estado,
+        ))
+
+    return ConfirmarAsistenciaOut(
+        appointment_id=appointment_id,
+        status="COMPLETADO",
+        unidades_creadas=unidades_creadas,
     )

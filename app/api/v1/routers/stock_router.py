@@ -4,9 +4,14 @@ from fastapi import APIRouter, Depends, Query
 
 from app.core.security import get_current_user
 from app.schemas.stock_schema import (
+    AgregarRequest,
     DashboardResumenOut,
+    HistorialOut,
     InicializarUmbralesOut,
+    RetirarBulkRequest,
+    RetirarRequest,
     ResumenOut,
+    TotalesOut,
     UmbralCreate,
     UmbralOut,
     UmbralPatch,
@@ -17,23 +22,35 @@ from app.schemas.stock_schema import (
 from app.api.v1.controllers.stock_controller import (
     actualizar_umbral_controller,
     actualizar_unidad_controller,
+    agregar_bulk_controller,
     crear_o_actualizar_umbral_controller,
     crear_unidad_controller,
     dashboard_resumen_controller,
     eliminar_unidad_controller,
     inicializar_umbrales_controller,
     listar_disponibles_controller,
+    listar_historial_controller,
     listar_umbrales_controller,
     listar_unidades_controller,
     obtener_unidad_controller,
     resumen_controller,
+    retirar_bulk_controller,
     retirar_unidad_controller,
+    totales_disponibles_controller,
     vencer_unidad_controller,
 )
 
 router = APIRouter(prefix="/stock", tags=["Stock"])
 
 # ─── Rutas fijas globales (deben ir ANTES de /{componente}) ──────────────────
+
+@router.get("/totales", response_model=TotalesOut)
+def totales_disponibles_endpoint(
+    current_user: dict = Depends(get_current_user),
+):
+    """Unidades disponibles totales del hospital autenticado, separadas por componente."""
+    return totales_disponibles_controller(current_user)
+
 
 @router.get("/dashboard/resumen", response_model=DashboardResumenOut)
 def dashboard_resumen_endpoint(
@@ -85,6 +102,24 @@ def inicializar_umbrales_endpoint(
     return inicializar_umbrales_controller(current_user)
 
 
+# ─── Historial de movimientos ────────────────────────────────────────────────
+# Debe ir ANTES de /{componente} para que "historial" no sea capturado como componente.
+
+@router.get("/historial", response_model=List[HistorialOut])
+def listar_historial_endpoint(
+    componente: Optional[str] = Query(default=None),
+    accion: Optional[str] = Query(default=None),
+    desde: Optional[str] = Query(default=None, description="Fecha ISO (ej: 2026-04-01)"),
+    hasta: Optional[str] = Query(default=None, description="Fecha ISO (ej: 2026-04-30)"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Lista el historial de movimientos de stock del hospital autenticado.
+    Ordenado por fecha descendente. Filtros opcionales: componente, accion, desde, hasta.
+    """
+    return listar_historial_controller(current_user, componente, accion, desde, hasta)
+
+
 # ─── Endpoints CRUD genéricos + semánticos por componente ────────────────────
 
 @router.post("/{componente}", response_model=UnidadOut, status_code=201)
@@ -96,14 +131,18 @@ def crear_unidad_endpoint(
     return crear_unidad_controller(componente, body, current_user)
 
 
-@router.post("/{componente}/agregar", response_model=UnidadOut, status_code=201)
+@router.post("/{componente}/agregar", response_model=List[UnidadOut], status_code=201)
 def agregar_unidad_endpoint(
     componente: str,
-    body: UnidadCreate,
+    body: AgregarRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    """Registra una unidad nueva con estado 'disponible'. El hospital_id viene del token."""
-    return crear_unidad_controller(componente, body, current_user)
+    """
+    Registra una o más unidades nuevas con estado 'disponible'. El hospital_id viene del token.
+    El campo 'cantidad' (default 1) indica cuántas unidades crear en una sola operación.
+    Registra automáticamente un movimiento en el historial de stock.
+    """
+    return agregar_bulk_controller(componente, body, current_user)
 
 
 # Las rutas /{componente}/{sub} con sub fijo deben ir ANTES de /{componente}/{unidad_id}
@@ -136,15 +175,36 @@ def listar_unidades_endpoint(
     return listar_unidades_controller(componente, blood_group, estado, current_user)
 
 
+# ─── Retiro bulk (debe ir ANTES de /{componente}/{unidad_id}) ────────────────
+
+@router.patch("/{componente}/retirar", response_model=List[UnidadOut])
+def retirar_bulk_endpoint(
+    componente: str,
+    body: RetirarBulkRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Retira múltiples unidades en una sola operación. Todas pasan a estado 'usado'.
+    Registra automáticamente un movimiento en el historial de stock.
+    Body: { unidad_ids: [...], motivo, motivo_detalle }
+    """
+    return retirar_bulk_controller(componente, body, current_user)
+
+
 # /{componente}/{unidad_id}/accion deben ir ANTES de /{componente}/{unidad_id}
 @router.patch("/{componente}/{unidad_id}/retirar", response_model=UnidadOut)
 def retirar_unidad_endpoint(
     componente: str,
     unidad_id: str,
+    body: Optional[RetirarRequest] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """Marca la unidad como 'usado'. Verifica que pertenezca al hospital autenticado."""
-    return retirar_unidad_controller(componente, unidad_id, current_user)
+    """
+    Marca la unidad como 'usado'. Verifica que pertenezca al hospital autenticado.
+    Body opcional: { motivo, motivo_detalle }.
+    motivo_detalle es obligatorio si motivo == 'otro'.
+    """
+    return retirar_unidad_controller(componente, unidad_id, current_user, body)
 
 
 @router.patch("/{componente}/{unidad_id}/vencer", response_model=UnidadOut)
