@@ -63,8 +63,8 @@ def get_nearby_donors_for_request_service(
         if lat is None or lng is None:
             continue
 
-        # filtro opcional de elegibilidad / consentimiento / suscripción
-        if donor.get("eligibility_status") not in {None, "APT"}:
+        # filtro de elegibilidad / consentimiento / suscripción
+        if donor.get("eligibility_status") != "APT":
             continue
 
         if donor.get("has_consent") is not True:

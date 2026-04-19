@@ -1,24 +1,888 @@
-# BACKEND CHANGES — Refactorización de Stock por Componentes
+# VitFlow API — Referencia completa de endpoints
 
 > **Audiencia:** equipo de frontend.  
-> **Última actualización:** 2026-04-12
+> **Última actualización:** 2026-04-18  
+> **Base URL:** `/api/v1`  
+> **Autenticación:** todos los endpoints (salvo los marcados como públicos) requieren `Authorization: Bearer <firebase_id_token>`.
 
 ---
 
-## 0. Nuevo endpoint: totales disponibles
+## Convenciones
 
-### `GET /api/v1/stock/totales`
+- `hospital_id` **nunca** se envía desde el frontend. El backend lo lee del token.
+- `user_id` tampoco se envía. Se infiere del token.
+- Campos marcados como *opcional* pueden omitirse o enviarse como `null`.
+- Fechas en formato `YYYY-MM-DD`. Timestamps en ISO 8601 UTC.
 
-Devuelve el conteo de unidades con `estado = "disponible"` en las tres
-colecciones (`globulos_rojos`, `plasma`, `plaquetas`) **del hospital del
-usuario autenticado** (leído del token, no del frontend).
+---
 
-**Headers requeridos:**
+## Enums globales
+
+| Enum | Valores |
+|------|---------|
+| `BloodGroup` | `A+` `A-` `B+` `B-` `AB+` `AB-` `O+` `O-` |
+| `Componente` | `globulos_rojos` `plasma` `plaquetas` |
+| `EstadoUnidad` | `disponible` `usado` `vencido` |
+| `MotivoRetiro` | `transfusion` `trasplante` `operacion` `otro` |
+| `AppointmentStatus` | `PROGRAMADO` `CONFIRMADO` `CANCELADO` `COMPLETADO` `NO_PRESENTADO` |
+| `DonationType` | `SANGRE` `PLAQUETAS` `MEDULA_OSEA` |
+| `HospitalRequestPriority` | `NORMAL` `URGENTE` `CRITICA` |
+| `HospitalRequestStatus` | `ACTIVO` `COMPLETO` `CANCELADO` `FINALIZADO` |
+| `HospitalRequestType` | `NORMAL` `CAMPAÑA` |
+| `EligibilityStatus` | `APT` `WAIT` `NOT_APT` |
+| `Gender` | `F` `M` `OTHER` |
+| `UserRole` | `HOSPITAL_ADMIN` `TECHNICIAN` |
+| `UserStatus` | `INVITED` `ACTIVE` `SUSPENDED` |
+| `OnboardingStatus` | `SUBMITTED` `APPROVED` `REJECTED` |
+
+---
+
+## AUTH — `/auth`
+
+---
+
+### `POST /auth/register`
+
+Registra un nuevo usuario en Firebase y Firestore.
+
+**Auth:** no requerida.
+
+**Request body:**
+```json
+{
+  "email": "string (email válido, obligatorio)",
+  "password": "string (min 6, max 128, obligatorio)",
+  "full_name": "string (min 1, max 100, obligatorio)",
+  "phone_number": "string (min 6, max 20, obligatorio)",
+  "address": {
+    "street": "string (min 1, max 100, obligatorio)",
+    "number": "string (min 1, max 10, obligatorio)",
+    "locality": "string (min 1, max 100, obligatorio)",
+    "city": "string (min 1, max 100, obligatorio)",
+    "province": "string (min 1, max 100, obligatorio)"
+  }
+}
 ```
-Authorization: Bearer <token>
+
+**Response `201 Created`:**
+```json
+{
+  "uid": "string",
+  "email": "string | null",
+  "firstName": "string | null",
+  "lastName": "string | null",
+  "phone": "string | null",
+  "dni": "string | null",
+  "role": "HOSPITAL_ADMIN | TECHNICIAN | null",
+  "status": "INVITED | ACTIVE | SUSPENDED | null",
+  "hospitalId": "string | null",
+  "createdAt": "string | null"
+}
 ```
 
-**Respuesta `200 OK`:**
+---
+
+### `GET /auth/me`
+
+Devuelve el perfil básico del usuario autenticado.
+
+**Response `200 OK`:** objeto `UserResponse` (mismo esquema que arriba).
+
+---
+
+### `GET /auth/me/full`
+
+Devuelve el perfil completo del usuario autenticado (incluye datos de Firestore sin mapeo a schema fijo).
+
+**Response `200 OK`:** objeto sin schema fijo, contiene todos los campos del documento `users/{uid}`.
+
+---
+
+## USERS — `/users`
+
+---
+
+### `GET /users`
+
+Lista todos los usuarios del hospital del admin autenticado.
+
+**Auth:** requiere rol `HOSPITAL_ADMIN`.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de documentos de usuario (sin schema fijo).
+
+---
+
+### `GET /users/getByID/{uid}`
+
+Obtiene un usuario por su UID de Firebase.
+
+**Path param:** `uid` — UID del usuario.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** objeto `UserResponse`.
+
+---
+
+### `POST /users/technicians`
+
+Crea un técnico para el hospital del admin autenticado.
+
+**Auth:** requiere rol `HOSPITAL_ADMIN`.
+
+**Request body:** objeto libre (`dict`). Campos típicos:
+```json
+{
+  "email": "string (obligatorio)",
+  "firstName": "string",
+  "lastName": "string",
+  "phone": "string"
+}
+```
+
+**Response `200 OK`:** objeto del técnico creado (sin schema fijo).
+
+---
+
+### `POST /users/{uid}/resend-invitation`
+
+Reenvía el email de invitación a un técnico.
+
+**Auth:** requiere rol `HOSPITAL_ADMIN`.
+
+**Path param:** `uid` — UID del técnico.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** confirmación (sin schema fijo).
+
+---
+
+### `PATCH /users/{uid}/status`
+
+Cambia el estado de un usuario (`ACTIVE`, `SUSPENDED`, etc.).
+
+**Auth:** requiere rol `HOSPITAL_ADMIN`.
+
+**Path param:** `uid` — UID del usuario.
+
+**Request body:**
+```json
+{
+  "status": "INVITED | ACTIVE | SUSPENDED (obligatorio)"
+}
+```
+
+**Response `200 OK`:** objeto actualizado (sin schema fijo).
+
+---
+
+## DONORS — `/donors`
+
+---
+
+### `POST /donors/validate-address`
+
+Valida y geocodifica una dirección usando Google Geocoding API.
+
+**Request body:**
+```json
+{
+  "address_text": "string (min 5, max 180, obligatorio)"
+}
+```
+
+**Response `200 OK`:**
+```json
+{
+  "ok": true,
+  "address_text": "string",
+  "geo": { "lat": -34.6, "lng": -58.4 }
+}
+```
+Si no se puede geocodificar: `"ok": false`, `"geo": null`.
+
+---
+
+### `POST /donors/`
+
+Crea un nuevo donante.
+
+**Request body:**
+```json
+{
+  "first_name": "string (max 50, obligatorio)",
+  "last_name": "string (max 50, obligatorio)",
+  "dni": "string (min 6, max 15, obligatorio)",
+  "email": "string (email, obligatorio)",
+  "phone_number": "string (min 6, max 20, obligatorio)",
+  "gender": "F | M | OTHER (obligatorio)",
+  "birth_date": "YYYY-MM-DD (obligatorio)",
+  "weight_kg": "float > 0, <= 300 (obligatorio)",
+  "blood_group": "BloodGroup (obligatorio)",
+  "address_text": "string (min 5, max 180, obligatorio)",
+  "has_recent_tattoo": "bool (default false)",
+  "last_tattoo_or_piercing_date": "YYYY-MM-DD (opcional)",
+  "last_donation_date": "YYYY-MM-DD (opcional)",
+  "medications": ["string"] | null,
+  "is_subscribed": "bool (default true)",
+  "has_consent": "bool (default true)",
+  "is_enabled": "bool (default true)",
+  "has_fever_or_infection": "bool (default false)",
+  "has_active_fever_or_infection": "bool (opcional)",
+  "infection_resolved_date": "YYYY-MM-DD (opcional)",
+  "screening_updated_at": "string (opcional)",
+  "is_currently_pregnant": "bool (opcional, solo si gender = F)",
+  "is_pregnant": "bool (opcional, solo si gender = F, campo legacy)",
+  "last_pregnancy_end_date": "YYYY-MM-DD (opcional, solo si gender = F)",
+  "pregnancy_end_type": "VAGINAL_BIRTH | CESAREAN | NON_SPONTANEOUS_ABORTION (opcional, solo si gender = F)",
+  "is_breastfeeding": "bool (opcional, solo si gender = F)"
+}
+```
+
+> Todos los campos de embarazo/lactancia **deben ser null** si `gender != F`.
+
+**Response `200 OK`:** objeto `Donor` completo (ver esquema en sección de respuestas).
+
+---
+
+### `GET /donors/`
+
+Lista todos los donantes. Sin filtros.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de objetos `Donor`.
+
+---
+
+### `GET /donors/by-dni/{dni}`
+
+Busca un donante por DNI.
+
+**Path param:** `dni` — número de documento.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** objeto `Donor` o `404` si no existe.
+
+---
+
+### `GET /donors/by-dni/{dni}/donation-opportunities`
+
+Devuelve las oportunidades de donación cercanas al donante (hospitales con pedidos activos compatibles dentro del radio).
+
+**Path param:** `dni`  
+**Query params:**
+| Param | Tipo | Default | Descripción |
+|-------|------|---------|-------------|
+| `radius_km` | float | `5.0` | Radio de búsqueda en km |
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de oportunidades (sin schema fijo).
+
+---
+
+### `GET /donors/by-dni/{dni}/campaigns`
+
+Devuelve las campañas de donación activas relevantes para el donante.
+
+**Path param:** `dni`
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de campañas (sin schema fijo).
+
+---
+
+### `GET /donors/by-blood-group/{blood_group}`
+
+Lista donantes filtrados por grupo sanguíneo.
+
+**Path param:** `blood_group` — valor del enum `BloodGroup`.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de objetos `Donor`.
+
+---
+
+### `POST /donors/{donor_id}/evaluate-eligibility`
+
+Evalúa y actualiza la elegibilidad del donante. Escribe `eligibility_status`, `eligibility_reasons` y `eligibility_available_from` en Firestore.
+
+**Path param:** `donor_id`
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** objeto con la elegibilidad actualizada (sin schema fijo).
+
+---
+
+### `GET /donors/{donor_id}`
+
+Obtiene un donante por su ID de Firestore.
+
+**Path param:** `donor_id`
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** objeto `Donor`.
+
+---
+
+### `PATCH /donors/{donor_id}`
+
+Actualiza datos del donante. Solo se envían los campos a modificar.
+
+**Path param:** `donor_id`
+
+**Request body** (todos opcionales):
+```json
+{
+  "weight_kg": "float > 0, <= 300",
+  "has_recent_tattoo": "bool",
+  "last_tattoo_or_piercing_date": "YYYY-MM-DD",
+  "last_donation_date": "YYYY-MM-DD",
+  "address_text": "string (min 5, max 180)",
+  "is_pregnant": "bool",
+  "is_currently_pregnant": "bool",
+  "last_pregnancy_end_date": "YYYY-MM-DD",
+  "pregnancy_end_type": "VAGINAL_BIRTH | CESAREAN | NON_SPONTANEOUS_ABORTION",
+  "is_breastfeeding": "bool",
+  "medications": ["string"],
+  "has_fever_or_infection": "bool",
+  "has_active_fever_or_infection": "bool",
+  "infection_resolved_date": "YYYY-MM-DD",
+  "screening_updated_at": "string",
+  "is_subscribed": "bool",
+  "has_consent": "bool",
+  "is_enabled": "bool"
+}
+```
+
+**Response `200 OK`:** objeto `Donor` actualizado.
+
+---
+
+### `GET /donors/nearby-for-request/{request_id}`
+
+Devuelve donantes cercanos al hospital que hizo el pedido, con grupo sanguíneo compatible y `eligibility_status = "APT"`. Solo incluye donantes con `has_consent = true` e `is_subscribed = true`.
+
+**Path param:** `request_id`  
+**Query params:**
+| Param | Tipo | Default | Descripción |
+|-------|------|---------|-------------|
+| `radius_km` | float | `5.0` | Radio de búsqueda en km |
+
+**Request body:** ninguno.
+
+**Response `200 OK`:**
+```json
+{
+  "hospital_request_id": "string",
+  "hospital_id": "string",
+  "blood_group": "BloodGroup",
+  "radius_km": 5.0,
+  "total": 3,
+  "donors": [
+    {
+      "id": "string",
+      "first_name": "string",
+      "last_name": "string",
+      "dni": "string",
+      "email": "string",
+      "phone_number": "string",
+      "blood_group": "BloodGroup",
+      "eligibility_status": "APT",
+      "distance_km": 2.3
+    }
+  ]
+}
+```
+
+---
+
+### `POST /donors/{donor_id}/reject-invitation`
+
+Registra la respuesta de un donante a una invitación enviada por Vito (WhatsApp). Se llama en tres situaciones:
+
+- El donante responde **"no puedo ahora"** → `reason: "not_now"`
+- El donante responde **"no quiero más avisos"** → `reason: "opt_out"` (setea `is_subscribed = false`)
+- Vito no recibe respuesta en 30 minutos → `reason: "no_response"` (solo registra el evento)
+
+Persiste el evento en la colección `donor_invitations` de Firestore.
+
+**Path param:** `donor_id`
+
+**Request body:**
+```json
+{
+  "hospital_request_id": "string (obligatorio)",
+  "reason": "not_now | opt_out | no_response (obligatorio)",
+  "notes": "string (opcional, max 500)"
+}
+```
+
+**Response `200 OK`:**
+```json
+{
+  "donor_id": "string",
+  "hospital_request_id": "string",
+  "reason": "not_now | opt_out | no_response",
+  "recorded_at": "ISO 8601 datetime",
+  "is_subscribed": true
+}
+```
+
+> Si `reason = "opt_out"`, `is_subscribed` será `false` en la respuesta y el donante quedará excluido de futuras notificaciones.  
+> Si `reason = "no_response"`, `is_subscribed` refleja el estado actual sin modificación.
+
+---
+
+## APPOINTMENTS — `/appointments`
+
+---
+
+### `GET /appointments/`
+
+Lista todos los turnos del hospital del usuario autenticado.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de objetos `Appointment` con su `id`.
+
+---
+
+### `GET /appointments/search/{desde}/{hasta}`
+
+Lista turnos en un rango de fechas.
+
+**Path params:**
+| Param | Tipo | Descripción |
+|-------|------|-------------|
+| `desde` | date (`YYYY-MM-DD`) | Fecha de inicio (inclusive) |
+| `hasta` | date (`YYYY-MM-DD`) | Fecha de fin (inclusive) |
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de turnos en el rango.
+
+---
+
+### `GET /appointments/window/months`
+
+Devuelve los turnos en la ventana del mes actual y próximo.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de turnos.
+
+---
+
+### `GET /appointments/by-dni/{dni}/active`
+
+Devuelve el turno activo (estado `PROGRAMADO` o `CONFIRMADO`) de un donante por DNI.
+
+**Path param:** `dni`
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** objeto turno o `null` si no tiene turno activo.
+
+---
+
+### `GET /appointments/request/{request_id}/available-days`
+
+Devuelve los días con disponibilidad para un pedido hospitalario dado.
+
+**Path param:** `request_id`  
+**Query params:**
+| Param | Tipo | Default | Obligatorio | Descripción |
+|-------|------|---------|-------------|-------------|
+| `donor_id` | string | — | sí | ID del donante a reservar |
+| `days_ahead` | int | `14` | no | Cuántos días hacia adelante buscar |
+| `allow_existing_active` | bool | `false` | no | Si se permite reservar aunque el donante ya tenga turno activo |
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de fechas disponibles (strings `YYYY-MM-DD`).
+
+---
+
+### `GET /appointments/request/{request_id}/available-time-ranges`
+
+Devuelve las franjas horarias disponibles para un día dado.
+
+**Path param:** `request_id`  
+**Query params:**
+| Param | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `donor_id` | string | sí | ID del donante |
+| `date_local` | date | sí | Fecha a consultar (`YYYY-MM-DD`) |
+| `allow_existing_active` | bool | no (default `false`) | Ver arriba |
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de franjas horarias disponibles.
+
+---
+
+### `GET /appointments/request/{request_id}/available-slots`
+
+Devuelve los slots (horarios exactos) disponibles para un día y franja.
+
+**Path param:** `request_id`  
+**Query params:**
+| Param | Tipo | Default | Obligatorio | Descripción |
+|-------|------|---------|-------------|-------------|
+| `donor_id` | string | — | sí | ID del donante |
+| `date_local` | date | — | sí | Fecha (`YYYY-MM-DD`) |
+| `time_range` | string | null | no | Franja horaria, ej: `"09:00-12:00"` |
+| `limit` | int | `8` | no | Máx resultados por página |
+| `offset` | int | `0` | no | Paginación |
+| `allow_existing_active` | bool | `false` | no | Ver arriba |
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista paginada de slots disponibles.
+
+---
+
+### `GET /appointments/{appointment_id}`
+
+Obtiene un turno por ID.
+
+**Path param:** `appointment_id`
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** objeto `Appointment` con todos sus campos.
+
+---
+
+### `POST /appointments/manual`
+
+Crea un turno de forma manual (ingresado por el hospital).
+
+**Request body:**
+```json
+{
+  "hospital_request_id": "string (obligatorio)",
+  "date_local": "YYYY-MM-DD (obligatorio)",
+  "time_local": "HH:MM (obligatorio)",
+  "donor": {
+    "full_name": "string (max 100, obligatorio)",
+    "dni": "string (min 6, max 10, obligatorio)"
+  },
+  "donation_type": "SANGRE | PLAQUETAS | MEDULA_OSEA (obligatorio)"
+}
+```
+
+**Response `200 OK`:** objeto turno creado.
+
+---
+
+### `POST /appointments/vito`
+
+Crea un turno generado por el chatbot Vito (WhatsApp).
+
+**Request body:**
+```json
+{
+  "donor_id": "string (obligatorio)",
+  "hospital_request_id": "string (obligatorio)",
+  "date_local": "YYYY-MM-DD (obligatorio)",
+  "time_local": "HH:MM (obligatorio)"
+}
+```
+
+**Response `200 OK`:** objeto turno creado.
+
+---
+
+### `PATCH /appointments/{appointment_id}/status`
+
+Cambia el estado de un turno.
+
+**Path param:** `appointment_id`
+
+**Request body:**
+```json
+{
+  "status": "PROGRAMADO | CONFIRMADO | CANCELADO | COMPLETADO | NO_PRESENTADO (obligatorio)"
+}
+```
+
+**Response `200 OK`:** objeto turno actualizado.
+
+---
+
+### `PATCH /appointments/{appointment_id}/reschedule`
+
+Reprograma un turno a una nueva fecha y hora.
+
+**Path param:** `appointment_id`
+
+**Request body:**
+```json
+{
+  "date_local": "YYYY-MM-DD (obligatorio)",
+  "time_local": "HH:MM (obligatorio)"
+}
+```
+
+**Response `200 OK`:** objeto turno actualizado.
+
+---
+
+### `POST /appointments/{appointment_id}/confirmar-asistencia`
+
+Marca la asistencia del donante: cambia el turno a `COMPLETADO` y crea una unidad de stock por cada componente seleccionado.
+
+**Path param:** `appointment_id`
+
+**Request body:**
+```json
+{
+  "blood_group": "BloodGroup (obligatorio)",
+  "componentes": ["globulos_rojos | plasma | plaquetas"] 
+}
+```
+> `componentes` debe tener al menos 1 elemento.
+
+**Response `200 OK`:**
+```json
+{
+  "appointment_id": "string",
+  "status": "COMPLETADO",
+  "unidades_creadas": [
+    {
+      "id": "string",
+      "componente": "string",
+      "blood_group": "string",
+      "fecha_vencimiento": "string",
+      "estado": "disponible"
+    }
+  ]
+}
+```
+
+---
+
+## HOSPITAL REQUESTS — `/hospital-requests`
+
+---
+
+### `POST /hospital-requests/`
+
+Crea un pedido de sangre del hospital.
+
+**Request body:**
+```json
+{
+  "hospital_unit": "ITU | Terapia Intensiva | Guardia | Quirofano | Clinica Medica (obligatorio)",
+  "component": "string (max 100, obligatorio)",
+  "blood_group": "string (min 2, max 4, obligatorio)",
+  "requested_units": "float > 0, <= 20 (obligatorio)",
+  "priority": "NORMAL | URGENTE | CRITICA (obligatorio)",
+  "requested_by": "string (max 100, obligatorio)",
+  "end_date": "string (ISO date/datetime, obligatorio)",
+  "request_type": "NORMAL | CAMPAÑA (default: NORMAL)",
+  "comments": "string (max 500, opcional)"
+}
+```
+
+**Response `200 OK`:** objeto pedido creado.
+
+---
+
+### `GET /hospital-requests/`
+
+Lista todos los pedidos del hospital del usuario autenticado.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de pedidos con sus IDs.
+
+---
+
+### `PATCH /hospital-requests/{request_id}`
+
+Actualiza campos de un pedido. Solo se envían los campos a modificar.
+
+**Path param:** `request_id`
+
+**Request body** (todos opcionales):
+```json
+{
+  "hospital_unit": "ITU | Terapia Intensiva | Guardia | Quirofano | Clinica Medica",
+  "priority": "NORMAL | URGENTE | CRITICA",
+  "status": "ACTIVO | COMPLETO | CANCELADO | FINALIZADO",
+  "comments": "string (max 500)",
+  "request_type": "NORMAL | CAMPAÑA",
+  "end_date": "string (min 10, max 40)"
+}
+```
+
+**Response `200 OK`:** objeto pedido actualizado.
+
+---
+
+### `GET /hospital-requests/{request_id}`
+
+Obtiene un pedido por ID.
+
+**Path param:** `request_id`
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** objeto pedido con todos sus campos.
+
+---
+
+## HOSPITAL AVAILABILITY — `/hospital-availability`
+
+---
+
+### `GET /hospital-availability`
+
+Obtiene la configuración de disponibilidad semanal del hospital autenticado.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:**
+```json
+{
+  "id_hospital": "string",
+  "days": [
+    {
+      "day": "Lunes | Martes | Miercoles | Jueves | Viernes | Sabado | Domingo",
+      "enabled": true,
+      "timeSlots": [
+        { "time": "HH:MM", "capacity": 5 }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+### `PUT /hospital-availability`
+
+Guarda (reemplaza completamente) la configuración de disponibilidad semanal.
+
+**Request body:**
+```json
+{
+  "days": [
+    {
+      "day": "Lunes | Martes | Miercoles | Jueves | Viernes | Sabado | Domingo (obligatorio)",
+      "enabled": "bool (default false)",
+      "timeSlots": [
+        { "time": "HH:MM (obligatorio)", "capacity": "int >= 1 (obligatorio)" }
+      ]
+    }
+  ]
+}
+```
+
+> Deben enviarse los **7 días exactamente**, sin repetir. Los minutos de `time` deben ser múltiplos de 5.
+
+**Response `200 OK`:** mismo esquema que el GET, con `id_hospital` incluido.
+
+---
+
+## BLOOD BANK — `/blood-bank`
+
+> Modelo de stock agregado (sistema anterior). Sigue activo en paralelo al sistema de unidades por componente.
+
+---
+
+### `GET /blood-bank`
+
+Devuelve el stock actual del banco de sangre del hospital.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:**
+```json
+{
+  "hospital_id": "string",
+  "stocks_units": { "A+": 5, "A-": 2, ... },
+  "thresholds_units": { "A+": 10, "A-": 4, ... }
+}
+```
+
+---
+
+### `PATCH /blood-bank/add-stock`
+
+Suma unidades al stock de un grupo sanguíneo.
+
+**Request body:**
+```json
+{
+  "blood_type": "BloodGroup (obligatorio)",
+  "amount_units": "int > 0, <= 5000000 (obligatorio)"
+}
+```
+
+**Response `200 OK`:** objeto `BloodBankOut` actualizado.
+
+---
+
+### `PATCH /blood-bank/remove-stock`
+
+Resta unidades al stock de un grupo sanguíneo.
+
+**Request body:**
+```json
+{
+  "blood_type": "BloodGroup (obligatorio)",
+  "amount_units": "int > 0, <= 5000000 (obligatorio)"
+}
+```
+
+**Response `200 OK`:** objeto `BloodBankOut` actualizado.
+
+---
+
+### `PATCH /blood-bank/thresholds`
+
+Actualiza los umbrales mínimos del banco de sangre (modelo viejo).
+
+**Request body:**
+```json
+{
+  "thresholds_units": {
+    "A+": 10, "A-": 5, "B+": 5, "B-": 3,
+    "AB+": 2, "AB-": 2, "O+": 8, "O-": 4
+  }
+}
+```
+
+**Response `200 OK`:** objeto `BloodBankOut` actualizado.
+
+---
+
+## STOCK — `/stock`
+
+> Sistema nuevo de stock por unidad física, separado por componente. Convive con `/blood-bank`.
+
+---
+
+### `GET /stock/totales`
+
+Devuelve el conteo total de unidades disponibles del hospital, separado por componente.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:**
 ```json
 {
   "total": 45,
@@ -28,624 +892,390 @@ Authorization: Bearer <token>
 }
 ```
 
-> Usar este endpoint para el contador de "unidades totales disponibles" del
-> home. El endpoint anterior (`/blood-bank`) devolvía datos del modelo viejo
-> y el número era incorrecto.
-
 ---
 
-## 1. Resumen del cambio
+### `GET /stock/dashboard/resumen`
 
-Hasta ahora el sistema manejaba el stock de sangre como un único contador
-genérico por grupo sanguíneo (ej: "tenemos 10 unidades de A+"). Eso cambió.
+Devuelve el resumen completo de stock disponible por componente y grupo sanguíneo. Los 8 grupos siempre están presentes aunque tengan 0.
 
-El stock ahora se modela a nivel de **unidad física individual**, separada
-por **componente sanguíneo**: glóbulos rojos, plasma y plaquetas. Cada unidad
-tiene su propio ciclo de vida (fecha de creación, fecha de vencimiento, estado).
-Los endpoints del banco de sangre viejo (`/blood-bank`) **no se eliminaron** y
-siguen funcionando; los nuevos endpoints conviven con ellos.
+**Request body:** ninguno.
 
----
-
-## 2. Colecciones nuevas en Firestore
-
-Se crearon **cuatro** colecciones nuevas. Las colecciones existentes no se tocaron.
-
-### `globulos_rojos`, `plasma`, `plaquetas`
-
-Cada documento representa **una unidad física** de ese componente.
-
+**Response `200 OK`:**
 ```json
 {
-  "id": "abc123xyz",
-  "hospital_id": "hospital_456",
-  "blood_group": "A+",
-  "fecha_creacion": "2026-04-10T14:30:00Z",
-  "fecha_vencimiento": "2026-05-22T14:30:00Z",
-  "estado": "disponible",
-  "turno_id": "turno_789",
-  "donante_id": "donante_321"
-}
-```
-
-| Campo              | Tipo      | Obligatorio | Notas |
-|--------------------|-----------|-------------|-------|
-| `id`               | string    | sí          | ID generado por Firestore |
-| `hospital_id`      | string    | sí          | — |
-| `blood_group`      | string    | sí          | Ver enums §5 |
-| `fecha_creacion`   | timestamp | sí          | UTC, seteado automáticamente al crear |
-| `fecha_vencimiento`| timestamp | sí          | Calculado automáticamente (ver §5) |
-| `estado`           | string    | sí          | `disponible` al crear; ver enums §5 |
-| `turno_id`         | string    | **no**      | Puede ser `null` si no viene de un turno |
-| `donante_id`       | string    | **no**      | Puede ser `null` si se carga manualmente |
-
-**Vida útil por componente** (determina `fecha_vencimiento`):
-
-| Componente      | Días desde creación |
-|-----------------|---------------------|
-| `globulos_rojos`| 42 días             |
-| `plasma`        | 365 días            |
-| `plaquetas`     | 5 días              |
-
-### `stock_umbrales`
-
-Almacena el umbral mínimo de stock para un componente + grupo sanguíneo en un hospital.
-El frontend puede usarlos para mostrar alertas visuales cuando el stock baja de ese valor.
-
-```json
-{
-  "id": "umbral_111",
-  "hospital_id": "hospital_456",
-  "componente": "globulos_rojos",
-  "blood_group": "O-",
-  "umbral_minimo": 5
+  "globulos_rojos": { "A+": 4, "A-": 1, "B+": 0, "B-": 2, "AB+": 0, "AB-": 0, "O+": 5, "O-": 1, "total": 13 },
+  "plasma":         { "A+": 2, "A-": 0, "B+": 1, "B-": 0, "AB+": 0, "AB-": 0, "O+": 3, "O-": 2, "total": 8 },
+  "plaquetas":      { "A+": 0, "A-": 0, "B+": 1, "B-": 0, "AB+": 0, "AB-": 0, "O+": 2, "O-": 0, "total": 3 }
 }
 ```
 
 ---
 
-## 3. Endpoints nuevos
+### `GET /stock/umbrales`
 
-Todos requieren el header `Authorization: Bearer <firebase_id_token>`.  
-Base URL: `/api/v1`
+Lista los umbrales mínimos de stock del hospital (24 umbrales: 3 componentes × 8 grupos).
 
----
+**Request body:** ninguno.
 
-### Dashboard de stock — resumen completo
-
-**`GET /stock/dashboard/resumen?hospital_id={id}`**
-
-El endpoint más importante para el dashboard. Devuelve en **una sola llamada**
-el conteo de unidades disponibles para los tres componentes, con todos los grupos
-sanguíneos presentes (aunque tengan 0).
-
-```
-GET /api/v1/stock/dashboard/resumen?hospital_id=hospital_456
-Authorization: Bearer <token>
-```
-
-Respuesta `200 OK`:
-
-```json
-{
-  "globulos_rojos": {
-    "A+": 4, "A-": 1, "B+": 0, "B-": 2,
-    "AB+": 0, "AB-": 0, "O+": 5, "O-": 1,
-    "total": 13
-  },
-  "plasma": {
-    "A+": 2, "A-": 0, "B+": 1, "B-": 0,
-    "AB+": 0, "AB-": 0, "O+": 3, "O-": 2,
-    "total": 8
-  },
-  "plaquetas": {
-    "A+": 0, "A-": 0, "B+": 1, "B-": 0,
-    "AB+": 0, "AB-": 0, "O+": 2, "O-": 0,
-    "total": 3
-  }
-}
-```
-
-> Los 8 grupos sanguíneos **siempre están presentes** en la respuesta, nunca se omiten.  
-> `total` es la suma de todos los grupos de ese componente.  
-> Solo cuenta unidades con `estado = "disponible"`.
-
----
-
-### Agregar unidad de componente
-
-**`POST /stock/{componente}/agregar`**  
-*(alias semántico — equivalente a `POST /stock/{componente}`)*
-
-Registra una unidad nueva. El estado inicial siempre es `"disponible"`.
-La `fecha_vencimiento` se calcula automáticamente; no hay que enviarla.
-
-```
-POST /api/v1/stock/globulos_rojos/agregar
-Authorization: Bearer <token>
-Content-Type: application/json
-```
-
-Body:
-
-```json
-{
-  "hospital_id": "hospital_456",
-  "blood_group": "A+",
-  "turno_id": null,
-  "donante_id": null
-}
-```
-
-Respuesta `201 Created`:
-
-```json
-{
-  "id": "abc123xyz",
-  "hospital_id": "hospital_456",
-  "blood_group": "A+",
-  "fecha_creacion": "2026-04-10T14:30:00Z",
-  "fecha_vencimiento": "2026-05-22T14:30:00Z",
-  "estado": "disponible",
-  "turno_id": null,
-  "donante_id": null
-}
-```
-
-> `{componente}` puede ser `globulos_rojos`, `plasma` o `plaquetas`.  
-> `turno_id` y `donante_id` son opcionales; enviar `null` si no aplica.
-
----
-
-### Listar unidades disponibles de un componente
-
-**`GET /stock/{componente}/disponibles`**
-
-Devuelve solo las unidades con `estado = "disponible"`. Filtros opcionales por query param.
-
-```
-GET /api/v1/stock/plasma/disponibles?hospital_id=hospital_456&blood_group=O%2B
-Authorization: Bearer <token>
-```
-
-| Query param   | Obligatorio | Ejemplo |
-|---------------|-------------|---------|
-| `hospital_id` | no          | `hospital_456` |
-| `blood_group` | no          | `O+` (URL-encode el `+` como `%2B`) |
-
-Respuesta `200 OK`: array de objetos `UnidadOut` (misma estructura que en §3 Agregar).
-
+**Response `200 OK`:** lista de `UmbralOut`:
 ```json
 [
   {
-    "id": "abc123xyz",
-    "hospital_id": "hospital_456",
-    "blood_group": "O+",
-    "fecha_creacion": "2026-04-10T14:30:00Z",
-    "fecha_vencimiento": "2027-04-10T14:30:00Z",
-    "estado": "disponible",
-    "turno_id": null,
-    "donante_id": null
-  }
-]
-```
-
-> Si no hay unidades que coincidan devuelve `[]`, nunca un error.
-
----
-
-### Retirar una unidad (uso clínico)
-
-**`PATCH /stock/{componente}/{id}/retirar`**
-
-Marca la unidad como `"usado"`. No requiere body.
-Usar cuando una unidad se entrega a un paciente o se usa clínicamente.
-
-```
-PATCH /api/v1/stock/globulos_rojos/abc123xyz/retirar
-Authorization: Bearer <token>
-```
-
-Respuesta `200 OK`: objeto `UnidadOut` con `estado: "usado"`.
-
----
-
-### Vencer una unidad manualmente
-
-**`PATCH /stock/{componente}/{id}/vencer`**
-
-Marca la unidad como `"vencido"`. No requiere body.
-Uso manual mientras no exista un job automático de vencimiento.
-
-```
-PATCH /api/v1/stock/plaquetas/abc123xyz/vencer
-Authorization: Bearer <token>
-```
-
-Respuesta `200 OK`: objeto `UnidadOut` con `estado: "vencido"`.
-
----
-
-### Confirmar donación y registrar componentes obtenidos
-
-**`POST /donaciones/confirmar`**
-
-Cuando un donante asiste a su turno, este endpoint registra qué componentes
-se extrajeron. Por cada componente en la lista se crea una unidad nueva en
-su colección con `estado = "disponible"`. **No modifica el turno.**
-
-```
-POST /api/v1/donaciones/confirmar
-Authorization: Bearer <token>
-Content-Type: application/json
-```
-
-Body:
-
-```json
-{
-  "turno_id": "turno_789",
-  "donante_id": "donante_321",
-  "hospital_id": "hospital_456",
-  "blood_group": "A+",
-  "componentes": ["globulos_rojos", "plasma"]
-}
-```
-
-> `componentes` acepta cualquier combinación de los tres valores posibles.
-> Debe tener al menos un elemento.
-
-Respuesta `201 Created`:
-
-```json
-{
-  "turno_id": "turno_789",
-  "donante_id": "donante_321",
-  "unidades_creadas": [
-    {
-      "id": "gr_001",
-      "hospital_id": "hospital_456",
-      "blood_group": "A+",
-      "fecha_creacion": "2026-04-10T14:30:00Z",
-      "fecha_vencimiento": "2026-05-22T14:30:00Z",
-      "estado": "disponible",
-      "turno_id": "turno_789",
-      "donante_id": "donante_321"
-    },
-    {
-      "id": "pl_002",
-      "hospital_id": "hospital_456",
-      "blood_group": "A+",
-      "fecha_creacion": "2026-04-10T14:30:00Z",
-      "fecha_vencimiento": "2027-04-10T14:30:00Z",
-      "estado": "disponible",
-      "turno_id": "turno_789",
-      "donante_id": "donante_321"
-    }
-  ]
-}
-```
-
----
-
-### Resumen por componente (por separado)
-
-**`GET /stock/{componente}/resumen?hospital_id={id}`**
-
-Alternativa al endpoint de dashboard cuando solo se necesita un componente.
-
-Respuesta `200 OK`:
-
-```json
-{
-  "hospital_id": "hospital_456",
-  "componente": "globulos_rojos",
-  "disponibles_por_grupo": {
-    "A+": 4,
-    "O-": 1
-  }
-}
-```
-
-> A diferencia del dashboard, aquí **solo se incluyen los grupos con stock > 0**.
-> Para el dashboard completo preferir `GET /stock/dashboard/resumen`.
-
----
-
-### Listar todas las unidades de un componente (con filtros)
-
-**`GET /stock/{componente}?hospital_id=&blood_group=&estado=`**
-
-Todos los filtros son opcionales. Permite listar por cualquier estado, incluyendo
-`"usado"` y `"vencido"` (útil para historial).
-
----
-
-### Obtener una unidad por ID
-
-**`GET /stock/{componente}/{id}`**
-
-Responde con el objeto `UnidadOut` o `404` si no existe.
-
----
-
-### Actualizar estado de una unidad (genérico)
-
-**`PATCH /stock/{componente}/{id}`**
-
-Body:
-
-```json
-{ "estado": "vencido" }
-```
-
-Acepta cualquier valor del enum de estado. Para las acciones más comunes
-preferir los endpoints semánticos `/retirar` y `/vencer`.
-
----
-
-### Eliminar una unidad
-
-**`DELETE /stock/{componente}/{id}`**
-
-Responde `204 No Content`. Sin body.
-
----
-
-### Umbrales mínimos
-
-**`GET /stock/umbrales?hospital_id={id}`** — lista todos los umbrales del hospital.
-
-**`POST /stock/umbrales`** — crea o actualiza un umbral (upsert por hospital+componente+grupo).
-
-Body:
-
-```json
-{
-  "hospital_id": "hospital_456",
-  "componente": "plaquetas",
-  "blood_group": "O-",
-  "umbral_minimo": 3
-}
-```
-
-**`PATCH /stock/umbrales/{umbral_id}`** — modifica solo el valor mínimo.
-
-Body:
-
-```json
-{ "umbral_minimo": 5 }
-```
-
-Respuesta de los tres: objeto `UmbralOut`.
-
-```json
-{
-  "id": "umbral_111",
-  "hospital_id": "hospital_456",
-  "componente": "plaquetas",
-  "blood_group": "O-",
-  "umbral_minimo": 5
-}
-```
-
----
-
-## 4. Endpoints que siguen igual
-
-Los siguientes endpoints **no fueron modificados** y pueden seguirse usando sin cambios:
-
-| Método | URL | Descripción |
-|--------|-----|-------------|
-| `GET`  | `/api/v1/blood-bank` | Stock agregado (modelo viejo) |
-| `PATCH`| `/api/v1/blood-bank/add-stock` | Sumar unidades al stock viejo |
-| `PATCH`| `/api/v1/blood-bank/remove-stock` | Restar unidades al stock viejo |
-| `PATCH`| `/api/v1/blood-bank/thresholds` | Umbrales del stock viejo |
-| `POST` | `/api/v1/auth/register` | Registro de usuario |
-| `GET`  | `/api/v1/auth/me` | Perfil del usuario autenticado |
-| `GET`  | `/api/v1/auth/me/full` | Perfil completo |
-| `GET`  | `/api/v1/appointments/` | Listar turnos |
-| `POST` | `/api/v1/appointments/manual` | Crear turno manual |
-| `PATCH`| `/api/v1/appointments/{id}/status` | Cambiar estado de turno |
-| `PATCH`| `/api/v1/appointments/{id}/reschedule` | Reprogramar turno |
-| `POST` | `/api/v1/appointments/vito` | Turno vía chatbot Vito |
-| `GET`  | `/api/v1/hospital-requests/` | Pedidos de sangre |
-| `POST` | `/api/v1/hospital-requests/` | Crear pedido |
-| `PATCH`| `/api/v1/hospital-requests/{id}` | Actualizar pedido |
-| `GET`  | `/api/v1/donors/` | Listar donantes |
-| `POST` | `/api/v1/donors/` | Crear donante |
-| `GET`  | `/api/v1/home/summary` | Resumen del home |
-| `GET`  | `/api/v1/users` | Listar usuarios |
-| todos  | `/api/v1/hospital-availability` | Disponibilidad hospitalaria |
-| todos  | `/api/v1/hospital-onboarding/` | Onboarding de hospitales |
-
----
-
-## 5. Enums y valores válidos
-
-### `componente`
-```
-globulos_rojos | plasma | plaquetas
-```
-
-### `estado`
-```
-disponible | usado | vencido
-```
-- Al crear una unidad el estado es siempre `"disponible"` (el backend lo fija, no se envía).
-- `"usado"`: unidad entregada a un paciente o utilizada clínicamente.
-- `"vencido"`: unidad fuera de su vida útil.
-
-### `blood_group`
-```
-A+ | A- | B+ | B- | AB+ | AB- | O+ | O-
-```
-> El `+` en URLs debe codificarse como `%2B`. Ejemplo: `blood_group=O%2B`.
-
-### Vida útil por componente
-
-| Componente       | Vencimiento desde fecha de creación |
-|------------------|-------------------------------------|
-| `globulos_rojos` | 42 días                             |
-| `plasma`         | 365 días                            |
-| `plaquetas`      | 5 días ← **muy corto, tenerlo en cuenta para alertas** |
-
----
-
-## 6. Pantallas del frontend que necesitan cambios
-
-### Dashboard de stock
-
-**Antes:** una única sección mostrando el total de unidades por grupo sanguíneo  
-(proveniente de `GET /blood-bank`, que devuelve un único objeto con `stocks_units`).
-
-**Ahora:** debe dividirse en **tres secciones**, una por componente.
-
-**Endpoint a consumir:**
-```
-GET /api/v1/stock/dashboard/resumen
-Authorization: Bearer <firebase_id_token>
-```
-
-**Estructura de datos que recibirá:**
-```json
-{
-  "globulos_rojos": { "A+": 4, "A-": 1, "B+": 0, ..., "total": 13 },
-  "plasma":         { "A+": 2, "A-": 0, "B+": 1, ..., "total": 8  },
-  "plaquetas":      { "A+": 0, "A-": 0, "B+": 1, ..., "total": 3  }
-}
-```
-
-**Notas de implementación:**
-- Los 8 grupos siempre están presentes, incluso con valor 0 → no hace falta manejar ausencia de claves.
-- Mostrar `total` como número destacado por componente es suficiente para una vista rápida.
-- Para alertas de umbral bajo, comparar con los valores de `GET /stock/umbrales` (sin parámetros) y cruzar por `componente` + `blood_group`.
-
----
-
-### Pantalla de confirmación de donación
-
-**Antes:** al confirmar que un donante asistió, solo se actualizaba el estado del turno.  
-El frontend no registraba qué componentes se obtuvieron.
-
-**Ahora:** luego de (o junto con) confirmar el turno, el frontend debe presentar
-un formulario/modal donde el personal del hospital seleccione qué componentes
-se extrajeron de esa donación y llamar al nuevo endpoint.
-
-**Endpoint a consumir:**
-```
-POST /api/v1/donaciones/confirmar
-```
-
-**Body a enviar:**
-```json
-{
-  "turno_id":   "id_del_turno",
-  "donante_id": "id_del_donante",
-  "blood_group": "A+",
-  "componentes": ["globulos_rojos", "plasma"]
-}
-```
-
-> `blood_group` es el grupo del donante (dato ya disponible en el turno/donante).  
-> `componentes` es una lista de checkboxes que el usuario selecciona.
-> Debe tener al menos 1 elemento seleccionado (el backend lo valida).
-> `hospital_id` **no va en el body** — el backend lo lee del token.
-
-**Estructura de datos que recibirá:**
-```json
-{
-  "turno_id": "id_del_turno",
-  "donante_id": "id_del_donante",
-  "unidades_creadas": [
-    {
-      "id": "gr_001",
-      "hospital_id": "hospital_456",
-      "blood_group": "A+",
-      "fecha_creacion": "2026-04-10T14:30:00Z",
-      "fecha_vencimiento": "2026-05-22T14:30:00Z",
-      "estado": "disponible",
-      "turno_id": "id_del_turno",
-      "donante_id": "id_del_donante"
-    }
-  ]
-}
-```
-
-El array `unidades_creadas` tiene tantos elementos como componentes se enviaron.
-El frontend puede usar esto para mostrar un feedback de confirmación
-("Se registraron 2 unidades: glóbulos rojos vence el 22/05, plasma vence el 10/04/2027").
-
-**Importante:** este endpoint **no cambia el estado del turno**. Si el flujo actual
-actualiza el estado del turno con `PATCH /appointments/{id}/status`, esa llamada
-sigue siendo necesaria por separado.
-
----
-
-## 7. Referencia rápida de endpoints clave
-
-### GET /api/v1/stock/umbrales
-
-```
-GET /api/v1/stock/umbrales
-Authorization: Bearer <firebase_id_token>
-```
-
-Sin parámetros. Devuelve los 24 umbrales del hospital (3 componentes × 8 grupos).
-
-**Respuesta:**
-```json
-[
-  {
-    "id": "0f8L57YCBxxyZxI772hZ",
-    "hospital_id": "nGIcjJ9VfPVL0HF1TvLA",
-    "componente": "globulos_rojos",
-    "blood_group": "O+",
+    "id": "string",
+    "hospital_id": "string",
+    "componente": "globulos_rojos | plasma | plaquetas",
+    "blood_group": "BloodGroup",
     "umbral_minimo": 5
-  },
-  {
-    "id": "4Gef2FNbiYO5dCbMO7iK",
-    "hospital_id": "nGIcjJ9VfPVL0HF1TvLA",
-    "componente": "plasma",
-    "blood_group": "A+",
-    "umbral_minimo": 3
-  },
-  {
-    "id": "9dXvNpQrsT4uVwYZ1efg",
-    "hospital_id": "nGIcjJ9VfPVL0HF1TvLA",
-    "componente": "plaquetas",
-    "blood_group": "AB-",
-    "umbral_minimo": 2
   }
 ]
 ```
 
-Valores por defecto al inicializar: `globulos_rojos=5`, `plasma=3`, `plaquetas=2`.  
-Para cruzar con el stock actual y detectar grupos por debajo del umbral,
-combinar con `GET /api/v1/stock/dashboard/resumen`.
+---
+
+### `POST /stock/umbrales`
+
+Crea o actualiza (upsert) un umbral para un componente + grupo sanguíneo.
+
+**Request body:**
+```json
+{
+  "componente": "globulos_rojos | plasma | plaquetas (obligatorio)",
+  "blood_group": "BloodGroup (obligatorio)",
+  "umbral_minimo": "int >= 0 (obligatorio)"
+}
+```
+
+**Response `201 Created`:** objeto `UmbralOut`.
 
 ---
 
-### GET /api/v1/home/summary
+### `PATCH /stock/umbrales/{umbral_id}`
 
-```
-GET /api/v1/home/summary
-Authorization: Bearer <firebase_id_token>
-```
+Modifica el valor mínimo de un umbral existente.
 
-Sin parámetros. Devuelve el resumen del dashboard principal del hospital.
+**Path param:** `umbral_id`
 
-**Respuesta:**
+**Request body:**
 ```json
 {
-  "stocks": {
-    "A+": 12, "A-": 3, "B+": 0, "B-": 1,
-    "AB+": 4, "AB-": 0, "O+": 8, "O-": 2
-  },
-  "thresholds": {
-    "A+": 10, "A-": 5, "B+": 5, "B-": 3,
-    "AB+": 2, "AB-": 2, "O+": 8, "O-": 4
-  },
+  "umbral_minimo": "int >= 0 (obligatorio)"
+}
+```
+
+**Response `200 OK`:** objeto `UmbralOut`.
+
+---
+
+### `POST /stock/umbrales/inicializar`
+
+Inicializa los 24 umbrales por defecto para el hospital. Solo crea los que no existen.
+
+**Request body:** ninguno.
+
+**Response `201 Created`:**
+```json
+{
+  "hospital_id": "string",
+  "umbrales_creados": 18,
+  "umbrales_existentes": 6
+}
+```
+
+---
+
+### `GET /stock/historial`
+
+Lista el historial de movimientos de stock (entradas y retiros), ordenado por fecha descendente.
+
+**Query params** (todos opcionales):
+| Param | Valores | Descripción |
+|-------|---------|-------------|
+| `componente` | `globulos_rojos` \| `plasma` \| `plaquetas` | Filtrar por componente |
+| `accion` | `agrego` \| `retiro` | Filtrar por tipo de movimiento |
+| `desde` | `YYYY-MM-DD` | Fecha de inicio (inclusive) |
+| `hasta` | `YYYY-MM-DD` | Fecha de fin (inclusive) |
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de `HistorialOut`:
+```json
+[
+  {
+    "id": "string",
+    "hospital_id": "string",
+    "usuario_id": "string",
+    "usuario_nombre": "string",
+    "accion": "agrego | retiro",
+    "componente": "Componente",
+    "blood_group": "BloodGroup",
+    "unidades_ids": ["string"],
+    "cantidad": 2,
+    "motivo": "transfusion | trasplante | operacion | otro | null",
+    "motivo_detalle": "string | null",
+    "fecha": "ISO 8601 datetime"
+  }
+]
+```
+
+---
+
+### `POST /stock/{componente}`
+
+Crea una sola unidad de un componente.
+
+**Path param:** `componente` — `globulos_rojos`, `plasma` o `plaquetas`.
+
+**Request body:**
+```json
+{
+  "blood_group": "BloodGroup (obligatorio)",
+  "turno_id": "string (opcional)",
+  "donante_id": "string (opcional)"
+}
+```
+
+**Response `201 Created`:** objeto `UnidadOut`:
+```json
+{
+  "id": "string",
+  "hospital_id": "string",
+  "blood_group": "BloodGroup",
+  "fecha_creacion": "ISO 8601 datetime",
+  "fecha_vencimiento": "ISO 8601 datetime",
+  "estado": "disponible",
+  "turno_id": "string | null",
+  "donante_id": "string | null",
+  "motivo": null,
+  "motivo_detalle": null
+}
+```
+
+> Vida útil automática: `globulos_rojos` 42 días, `plasma` 365 días, `plaquetas` 5 días.
+
+---
+
+### `POST /stock/{componente}/agregar`
+
+Crea una o más unidades del mismo componente y grupo sanguíneo en una operación. Registra historial automáticamente.
+
+**Path param:** `componente`
+
+**Request body:**
+```json
+{
+  "blood_group": "BloodGroup (obligatorio)",
+  "cantidad": "int >= 1, <= 100 (default: 1)"
+}
+```
+
+**Response `201 Created`:** array de `UnidadOut`.
+
+---
+
+### `GET /stock/{componente}`
+
+Lista todas las unidades de un componente del hospital. Filtros opcionales.
+
+**Path param:** `componente`
+
+**Query params** (opcionales):
+| Param | Descripción |
+|-------|-------------|
+| `blood_group` | Filtrar por grupo sanguíneo |
+| `estado` | `disponible` \| `usado` \| `vencido` |
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de `UnidadOut`.
+
+---
+
+### `GET /stock/{componente}/resumen`
+
+Resumen de unidades disponibles por grupo sanguíneo para un componente. Solo incluye grupos con stock > 0.
+
+**Path param:** `componente`
+
+**Request body:** ninguno.
+
+**Response `200 OK`:**
+```json
+{
+  "hospital_id": "string",
+  "componente": "globulos_rojos | plasma | plaquetas",
+  "disponibles_por_grupo": { "A+": 4, "O-": 1 }
+}
+```
+
+---
+
+### `GET /stock/{componente}/disponibles`
+
+Lista solo las unidades con `estado = "disponible"`. Filtro opcional por grupo.
+
+**Path param:** `componente`
+
+**Query params** (opcionales):
+| Param | Descripción |
+|-------|-------------|
+| `blood_group` | Filtrar por grupo sanguíneo (`O%2B` para `O+`) |
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** lista de `UnidadOut`.
+
+---
+
+### `PATCH /stock/{componente}/retirar`
+
+Retira múltiples unidades en una sola operación. Todas pasan a `estado = "usado"`. Registra historial automáticamente.
+
+**Path param:** `componente`
+
+**Request body:**
+```json
+{
+  "unidad_ids": ["string"] ,
+  "motivo": "transfusion | trasplante | operacion | otro (opcional)",
+  "motivo_detalle": "string (obligatorio si motivo = 'otro')"
+}
+```
+
+**Response `200 OK`:** lista de `UnidadOut` con `estado: "usado"`.
+
+> Si algún ID no existe o pertenece a otro hospital → `404` / `403`.
+
+---
+
+### `GET /stock/{componente}/{unidad_id}`
+
+Obtiene una unidad por ID.
+
+**Path params:** `componente`, `unidad_id`
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** objeto `UnidadOut` o `404`.
+
+---
+
+### `PATCH /stock/{componente}/{unidad_id}`
+
+Actualiza el estado de una unidad (genérico).
+
+**Path params:** `componente`, `unidad_id`
+
+**Request body:**
+```json
+{ "estado": "disponible | usado | vencido (obligatorio)" }
+```
+
+**Response `200 OK`:** objeto `UnidadOut`.
+
+---
+
+### `PATCH /stock/{componente}/{unidad_id}/retirar`
+
+Marca una unidad como `"usado"`. Verifica que pertenezca al hospital del token.
+
+**Path params:** `componente`, `unidad_id`
+
+**Request body** (opcional):
+```json
+{
+  "motivo": "transfusion | trasplante | operacion | otro",
+  "motivo_detalle": "string (obligatorio si motivo = 'otro')"
+}
+```
+
+**Response `200 OK`:** objeto `UnidadOut` con `estado: "usado"`.
+
+> Este endpoint individual **no genera historial automático**. Para historial usar `PATCH /{componente}/retirar` (bulk).
+
+---
+
+### `PATCH /stock/{componente}/{unidad_id}/vencer`
+
+Marca una unidad como `"vencido"`.
+
+**Path params:** `componente`, `unidad_id`
+
+**Request body:** ninguno.
+
+**Response `200 OK`:** objeto `UnidadOut` con `estado: "vencido"`.
+
+---
+
+### `DELETE /stock/{componente}/{unidad_id}`
+
+Elimina una unidad de Firestore.
+
+**Path params:** `componente`, `unidad_id`
+
+**Request body:** ninguno.
+
+**Response `204 No Content`:** sin body.
+
+---
+
+## DONACIONES — `/donaciones`
+
+---
+
+### `POST /donaciones/confirmar`
+
+Confirma la asistencia de un donante y registra los componentes obtenidos. Crea una unidad por cada componente seleccionado. **No modifica el estado del turno.**
+
+**Request body:**
+```json
+{
+  "turno_id": "string (obligatorio)",
+  "donante_id": "string (obligatorio)",
+  "blood_group": "BloodGroup (obligatorio)",
+  "componentes": ["globulos_rojos | plasma | plaquetas"]
+}
+```
+> `componentes` debe tener al menos 1 elemento. `hospital_id` **no va en el body**.
+
+**Response `201 Created`:**
+```json
+{
+  "turno_id": "string",
+  "donante_id": "string",
+  "unidades_creadas": [
+    {
+      "id": "string",
+      "hospital_id": "string",
+      "blood_group": "BloodGroup",
+      "fecha_creacion": "ISO 8601 datetime",
+      "fecha_vencimiento": "ISO 8601 datetime",
+      "estado": "disponible",
+      "turno_id": "string",
+      "donante_id": "string",
+      "motivo": null,
+      "motivo_detalle": null
+    }
+  ]
+}
+```
+
+---
+
+## HOME — `/home`
+
+---
+
+### `GET /home/summary`
+
+Devuelve el resumen principal del dashboard del hospital.
+
+**Request body:** ninguno.
+
+**Response `200 OK`:**
+```json
+{
+  "stocks": { "A+": 12, "A-": 3, "B+": 0, ... },
+  "thresholds": { "A+": 10, "A-": 5, "B+": 5, ... },
   "kpis": {
     "totalUnits": 30,
     "urgentActive": 2,
@@ -653,8 +1283,7 @@ Sin parámetros. Devuelve el resumen del dashboard principal del hospital.
     "criticalGroupsCount": 3
   },
   "appointments": [
-    { "time_local": "09:00", "donation_type": "SANGRE",    "status": "PROGRAMADO" },
-    { "time_local": "10:30", "donation_type": "PLAQUETAS", "status": "CONFIRMADO" }
+    { "time_local": "09:00", "donation_type": "SANGRE", "status": "PROGRAMADO" }
   ],
   "activeRequests": [
     {
@@ -672,373 +1301,112 @@ Sin parámetros. Devuelve el resumen del dashboard principal del hospital.
 
 | Campo | Descripción |
 |-------|-------------|
-| `stocks` | Stock agregado por grupo sanguíneo (modelo viejo de blood-bank) |
-| `thresholds` | Umbrales del modelo viejo de blood-bank |
-| `kpis.totalUnits` | Suma de todas las unidades del stock viejo |
-| `kpis.urgentActive` | Pedidos activos con prioridad URGENTE o CRITICA |
-| `kpis.appointmentsToday` | Turnos de hoy con estado PROGRAMADO o CONFIRMADO |
+| `stocks` / `thresholds` | Modelo viejo de blood-bank (stock agregado por grupo) |
+| `kpis.totalUnits` | Suma del stock viejo |
+| `kpis.urgentActive` | Pedidos activos con prioridad `URGENTE` o `CRITICA` |
+| `kpis.appointmentsToday` | Turnos de hoy con estado `PROGRAMADO` o `CONFIRMADO` |
 | `kpis.criticalGroupsCount` | Grupos por debajo de su umbral |
 | `appointments` | Turnos de hoy y mañana, ordenados por hora |
-| `activeRequests` | Todos los pedidos hospitalarios del hospital |
-
-> **Nota:** `stocks` y `thresholds` pertenecen al modelo de sangre viejo (`/blood-bank`).
-> Son independientes del nuevo sistema de unidades por componente (`/stock/*`).
-> Si el dashboard necesita el desglose por glóbulos/plasma/plaquetas, usar además
-> `GET /api/v1/stock/dashboard/resumen`.
+| `activeRequests` | Todos los pedidos activos del hospital |
 
 ---
 
+## HOSPITAL ONBOARDING — `/hospital-onboarding`
+
+> Endpoints públicos (sin autenticación requerida).
+
 ---
 
-## 8. Actualización 2026-04-12 — Múltiples unidades y historial de movimientos
+### `POST /hospital-onboarding/`
 
-### 8.1 `POST /stock/{componente}/agregar` — ahora soporta múltiples unidades
+Crea una solicitud de registro de un nuevo hospital.
 
-El endpoint ya **no devuelve un objeto único**, sino un **array** con todas las unidades creadas.
+**Auth:** ninguna.
 
-**Body actualizado:**
-
+**Request body:**
 ```json
 {
-  "blood_group": "A+",
-  "cantidad": 3
-}
-```
-
-| Campo       | Tipo   | Obligatorio | Descripción |
-|-------------|--------|-------------|-------------|
-| `blood_group` | string | sí | Grupo sanguíneo (enum §5) |
-| `cantidad`  | int    | no | Unidades a crear. Default: `1`. Máximo: `100`. |
-
-> `turno_id` y `donante_id` ya no forman parte de este body. Para cargas manuales no se asocian a un turno.
-
-**Respuesta `201 Created`:** array de `UnidadOut`
-
-```json
-[
-  {
-    "id": "abc1",
-    "hospital_id": "hospital_456",
-    "blood_group": "A+",
-    "fecha_creacion": "2026-04-12T10:00:00Z",
-    "fecha_vencimiento": "2026-05-24T10:00:00Z",
-    "estado": "disponible",
-    "turno_id": null,
-    "donante_id": null
+  "hospital": {
+    "name": "string (min 3, max 120, obligatorio)",
+    "email": "string (email, obligatorio)",
+    "phone": "string (min 6, max 20, obligatorio)",
+    "logoFile": "string (opcional)",
+    "address": {
+      "province": "string (min 2, max 80, obligatorio)",
+      "localidad": "string (min 2, max 80, obligatorio)",
+      "city": "string (min 2, max 80, obligatorio)",
+      "street": "string (min 2, max 120, obligatorio)",
+      "number": "string (min 1, max 10, obligatorio)",
+      "provinceId": "string (obligatorio)",
+      "localidadId": "string (obligatorio)"
+    }
   },
-  {
-    "id": "abc2",
-    "blood_group": "A+",
-    "..."
-  }
-]
-```
-
-> El registro de historial se crea automáticamente — el frontend no tiene que hacer nada adicional.
-
----
-
-### 8.2 `PATCH /stock/{componente}/retirar` — retiro de múltiples unidades
-
-**Nuevo endpoint.** Retira varias unidades en una sola operación.
-
-> El endpoint individual `PATCH /stock/{componente}/{id}/retirar` **sigue existiendo** y no fue modificado.
-
-```
-PATCH /api/v1/stock/globulos_rojos/retirar
-Authorization: Bearer <token>
-Content-Type: application/json
-```
-
-**Body:**
-
-```json
-{
-  "unidad_ids": ["id1", "id2", "id3"],
-  "motivo": "transfusion",
-  "motivo_detalle": null
+  "admin": {
+    "firstName": "string (min 2, max 40, obligatorio)",
+    "lastName": "string (min 2, max 40, obligatorio)",
+    "email": "string (email, obligatorio)",
+    "phone": "string (min 6, max 20, obligatorio)",
+    "dni": "string (7-8 dígitos, obligatorio)"
+  },
+  "status": "SUBMITTED | APPROVED | REJECTED (obligatorio)",
+  "createdAt": "string (obligatorio)",
+  "updatedAt": "string (obligatorio)"
 }
 ```
 
-| Campo          | Tipo           | Obligatorio | Descripción |
-|----------------|----------------|-------------|-------------|
-| `unidad_ids`   | array\<string\> | sí          | Al menos 1 ID. Todas deben pertenecer al hospital del token. |
-| `motivo`       | string         | no          | `transfusion` \| `trasplante` \| `operacion` \| `otro` |
-| `motivo_detalle` | string       | condicional | Obligatorio si `motivo == "otro"` |
-
-**Respuesta `200 OK`:** array de `UnidadOut` con `estado: "usado"`.
-
-> Si alguna unidad no existe o pertenece a otro hospital, devuelve `404` o `403` y ninguna unidad es modificada hasta ese punto (no hay transacción atómica — se procesan en orden).
-
-> El registro de historial se crea automáticamente.
+**Response `200 OK`:** objeto de la solicitud creada.
 
 ---
 
-### 8.3 `GET /stock/historial` — historial de movimientos
+### `GET /hospital-onboarding/`
 
-Lista todos los movimientos de stock del hospital autenticado, ordenados por fecha descendente.
+Lista todas las solicitudes de onboarding (backoffice).
 
-```
-GET /api/v1/stock/historial
-Authorization: Bearer <token>
-```
+**Auth:** ninguna.
 
-**Query params opcionales:**
+**Request body:** ninguno.
 
-| Parámetro   | Valores válidos | Descripción |
-|-------------|-----------------|-------------|
-| `componente` | `globulos_rojos` \| `plasma` \| `plaquetas` | Filtrar por componente |
-| `accion`    | `agrego` \| `retiro` | Filtrar por tipo de movimiento |
-| `desde`     | ISO date, ej: `2026-04-01` | Fecha de inicio (inclusive) |
-| `hasta`     | ISO date, ej: `2026-04-30` | Fecha de fin (inclusive) |
+**Response `200 OK`:** lista de solicitudes.
 
-**Respuesta `200 OK`:**
+---
 
-```json
-[
-  {
-    "id": "mov_001",
-    "hospital_id": "hospital_456",
-    "usuario_id": "uid_del_usuario",
-    "usuario_nombre": "María López",
-    "accion": "retiro",
-    "componente": "globulos_rojos",
-    "blood_group": "A+",
-    "unidades_ids": ["id1", "id2"],
-    "cantidad": 2,
-    "motivo": "transfusion",
-    "motivo_detalle": null,
-    "fecha": "2026-04-12T14:30:00Z"
-  }
-]
-```
+### `PATCH /hospital-onboarding/{request_id}`
 
-> `usuario_nombre` se construye automáticamente del perfil del usuario autenticado (`firstName + lastName`).
+Aprueba o rechaza una solicitud de onboarding (backoffice).
 
-**Cuándo se genera un registro automáticamente:**
+**Auth:** ninguna.
 
-| Acción | `accion` en historial | Notas |
-|--------|-----------------------|-------|
-| `POST /stock/{componente}/agregar` | `"agrego"` | Un registro por llamada, con todas las unidades creadas |
-| `PATCH /stock/{componente}/retirar` | `"retiro"` | Un registro por llamada, con todas las unidades retiradas |
-| `POST /donaciones/confirmar` | `"agrego"` | Un registro por cada componente en `body.componentes` |
+**Path param:** `request_id`
 
-> El endpoint individual `PATCH /{componente}/{id}/retirar` **no** genera historial (es el endpoint legacy). Para historial usar el nuevo bulk.
-
-**Colección Firestore nueva:** `stock_historial`
-
+**Request body:**
 ```json
 {
-  "hospital_id": "hospital_456",
-  "usuario_id": "uid_abc",
-  "usuario_nombre": "María López",
-  "accion": "agrego",
-  "componente": "plasma",
-  "blood_group": "O+",
-  "unidades_ids": ["pl_001", "pl_002", "pl_003"],
-  "cantidad": 3,
-  "motivo": null,
-  "motivo_detalle": null,
-  "fecha": "2026-04-12T10:00:00Z"
+  "status": "SUBMITTED | APPROVED | REJECTED (obligatorio)",
+  "reviewedBy": "string (opcional)",
+  "reviewedAt": "string (opcional)",
+  "reviewNote": "string (opcional)"
 }
 ```
 
----
-
-## 9. Pendiente — no implementar todavía (renumerado desde §7)
-
-Las siguientes features están marcadas como TODO en el código y **no están implementadas**.
-El frontend no debe construir pantallas para estas funcionalidades aún:
-
-### Donación por aféresis
-La donación exclusiva de plaquetas por aféresis requiere un tipo de turno diferente
-al turno genérico actual. En esta modalidad el donante dona únicamente plaquetas,
-en mayor cantidad que en una donación de sangre completa.  
-Cuando se implemente tendrá su propio flujo de confirmación y un nuevo tipo de turno `"aferesis"`.  
-Las unidades generadas irán a la colección `plaquetas` igual que hoy.
-
-### Vencimiento automático de unidades
-Hoy las unidades no se marcan automáticamente como `"vencido"` al superar su `fecha_vencimiento`.
-Existe el endpoint `PATCH /stock/{componente}/{id}/vencer` para hacerlo manualmente.
-En el futuro habrá un job automático (Cloud Function u otro) que lo haga sin intervención.
-
-### Features fuera del scope de esta refactorización
-- Cantidades en mililitros por unidad
-- Vincular turnos a componentes específicos desde el módulo de turnos
-- Modificar pedidos hospitalarios para referenciar componentes
+**Response `200 OK`:** objeto de la solicitud actualizada.
 
 ---
 
-## 9. Seguridad — hospital_id desde el token
+## Notas de seguridad
 
-> **Cambio importante** (2026-04-11): el `hospital_id` ya **no se pasa como parámetro**
-> en ningún endpoint de stock ni donaciones. El backend lo lee directamente del
-> token de Firebase del usuario autenticado.
+- **`hospital_id`** nunca se envía desde el frontend. El backend lo extrae del token en cada request.
+- **`donor_id`** sí se envía en los endpoints de disponibilidad de turnos y en `/appointments/vito`, porque identifica a otra persona (el donante), no al usuario autenticado.
+- En endpoints PATCH/DELETE de stock, el backend verifica que el recurso pertenezca al hospital del usuario antes de modificarlo → `403` si no.
 
-### De dónde viene el hospital_id ahora
+## Vida útil por componente
 
-El flujo es:
+| Componente | Días |
+|------------|------|
+| `globulos_rojos` | 42 |
+| `plasma` | 365 |
+| `plaquetas` | 5 ← muy corto, priorizar alertas |
 
-1. El usuario se autentica con Firebase y recibe un ID token.
-2. En cada request, el backend verifica el token con Firebase Admin SDK.
-3. Con el `uid` del token, el backend lee el documento `users/{uid}` en Firestore
-   y extrae el campo `hospitalId` (que fue asignado durante el onboarding).
-4. Ese `hospitalId` se usa en todas las queries de stock — el frontend nunca puede
-   falsificarlo porque no forma parte del body ni de los query params.
+## Codificación de `+` en URLs
 
-Además, en los endpoints PATCH (retirar, vencer, actualizar umbral), el backend
-verifica que el recurso pertenezca al hospital del usuario antes de modificarlo.
-Si otro hospital intenta modificar un recurso ajeno, recibe `403 Forbidden`.
-
-### Impacto en las llamadas del frontend
-
-**Antes** (ya no funciona así):
-```
-GET /api/v1/stock/umbrales?hospital_id=nGIcjJ9VfPVL0HF1TvLA
-GET /api/v1/stock/dashboard/resumen?hospital_id=nGIcjJ9VfPVL0HF1TvLA
-```
-
-**Ahora** (forma correcta):
-```
-GET /api/v1/stock/umbrales
-GET /api/v1/stock/dashboard/resumen
-Authorization: Bearer <firebase_id_token>
-```
-
-El token ya identifica al hospital. No hay que pasar `hospital_id` en ningún lado.
-
-### Endpoints que cambiaron su firma
-
-| Endpoint | Antes | Ahora |
-|----------|-------|-------|
-| `GET /stock/umbrales` | `?hospital_id=...` requerido | Sin params — hospital del token |
-| `GET /stock/dashboard/resumen` | `?hospital_id=...` requerido | Sin params |
-| `GET /stock/{componente}` | `?hospital_id=...` opcional | Sin hospital_id — siempre filtra por el del token |
-| `GET /stock/{componente}/disponibles` | `?hospital_id=...` opcional | Solo acepta `?blood_group=...` |
-| `GET /stock/{componente}/resumen` | `?hospital_id=...` requerido | Sin params |
-| `POST /stock/{componente}` y `/agregar` | Body incluía `hospital_id` | Sin `hospital_id` en body |
-| `POST /stock/umbrales` | Body incluía `hospital_id` | Sin `hospital_id` en body |
-| `POST /stock/umbrales/inicializar` | Body `{ hospital_id }` | Sin body — usa el del token |
-| `POST /donaciones/confirmar` | Body incluía `hospital_id` | Sin `hospital_id` en body |
-
-### Ejemplo actualizado — umbrales
-
-```
-GET /api/v1/stock/umbrales
-Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
-
-HTTP 200 OK
-[
-  { "id": "0f8L57YCBxxyZxI772hZ", "hospital_id": "nGIcjJ9VfPVL0HF1TvLA", "componente": "globulos_rojos", "blood_group": "O+", "umbral_minimo": 5 },
-  { "id": "4Gef2FNbiYO5dCbMO7iK", "hospital_id": "nGIcjJ9VfPVL0HF1TvLA", "componente": "plasma",         "blood_group": "AB+", "umbral_minimo": 3 },
-  ...
-]
-```
-
-### Ejemplo actualizado — confirmar donación
-
-```json
-POST /api/v1/donaciones/confirmar
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "turno_id":   "turno_789",
-  "donante_id": "donante_321",
-  "blood_group": "A+",
-  "componentes": ["globulos_rojos", "plasma"]
-}
-```
-
-> `hospital_id` ya **no va en el body**. El backend lo lee del token.
-
----
-
-## 9b. Notas técnicas para el frontend
-
-### Campos opcionales
-- `turno_id` y `donante_id` en `UnidadOut` pueden ser `null`. Manejar ambos casos en la UI.
-
-### Campos siempre presentes
-- `id`, `hospital_id`, `blood_group`, `fecha_creacion`, `fecha_vencimiento`, `estado`
-  siempre están en toda respuesta de unidad.
-- En `GET /stock/dashboard/resumen` los 8 grupos sanguíneos y `total` siempre están presentes.
-
-### Codificación de `+` en URLs
-Al filtrar por grupos como `A+`, `B+`, `O+`, `AB+` en query params, el `+` debe
-ir codificado como `%2B`. Ejemplo: `?blood_group=O%2B`.
-
-### Orden recomendado para implementar
-1. **Dashboard de stock** — consumir `GET /stock/dashboard/resumen`. Es de solo lectura y no depende de nada más.
-2. **Pantalla de confirmación de donación** — agregar el formulario de componentes y llamar a `POST /donaciones/confirmar`.
-3. **Gestión manual de unidades** (si aplica) — usar `/agregar`, `/retirar`, `/vencer` según el flujo de gestión de banco de sangre.
-4. **Umbrales y alertas** — implementar último, es opcional para el MVP.
-
-### El modelo viejo de stock sigue activo
-`GET /blood-bank` y sus endpoints asociados **no fueron eliminados**. Si el dashboard
-actual los consume, puede seguir haciéndolo mientras se migra. Ambos modelos
-(viejo y nuevo) están activos en paralelo.
-
----
-
-## 10. Auditoría de seguridad completa — hospital_id y user_id
-
-> **Actualización** (2026-04-11): se realizó una auditoría de seguridad sobre
-> **todos** los endpoints del backend para garantizar que ninguno acepte
-> `hospital_id` ni `user_id` como parámetro enviado desde el frontend.
-
-### Resultado: ningún endpoint los acepta como parámetro externo
-
-La auditoría cubrió los siguientes módulos:
-
-| Módulo | Endpoints auditados | Resultado |
-|--------|---------------------|-----------|
-| `/stock/*` | 12 endpoints | ✅ hospital_id del token (ya auditado en §9) |
-| `/donaciones/*` | 1 endpoint | ✅ hospital_id del token (ya auditado en §9) |
-| `/appointments/*` | 11 endpoints | ✅ hospital_id del token |
-| `/hospital-requests/*` | 4 endpoints | ✅ hospital_id del token |
-| `/hospital-availability/*` | 2 endpoints | ✅ hospital_id del token |
-| `/blood-bank/*` | 4 endpoints | ✅ hospital_id del token |
-| `/home/*` | 1 endpoint | ✅ hospital_id del token |
-| `/donors/*` | 9 endpoints | ✅ sin hospital_id ni user_id |
-| `/users/*` | 5 endpoints | ✅ sin hospital_id |
-| `/auth/*` | 3 endpoints | ✅ sin hospital_id |
-| `/hospital-onboarding/*` | 3 endpoints | ✅ endpoint público, sin auth |
-
-### Parámetros legítimos que SÍ vienen del frontend (no son hospital_id ni user_id)
-
-Algunos endpoints reciben IDs de otras entidades que el frontend sí debe proveer,
-porque representan datos de negocio que no pueden inferirse del token:
-
-| Endpoint | Parámetro | Por qué es legítimo |
-|----------|-----------|---------------------|
-| `GET /appointments/request/{request_id}/available-days?donor_id=...` | `donor_id` | El hospital verifica elegibilidad de un donante externo; no es el usuario autenticado |
-| `GET /appointments/request/{request_id}/available-time-ranges?donor_id=...` | `donor_id` | Ídem |
-| `GET /appointments/request/{request_id}/available-slots?donor_id=...` | `donor_id` | Ídem |
-| `POST /appointments/vito` body: `{ donor_id, ... }` | `donor_id` | El chatbot Vito reserva en nombre de un donante identificado por ID |
-
-En todos estos casos el `donor_id` identifica a **otra persona** (el donante),
-no al usuario autenticado. No puede venir del token.
-
-### Mejora técnica aplicada: eliminación de lectura redundante a Firestore
-
-`resolve_hospital_id()` en `app/utils/auth_utils.py` fue refactorizado.
-**Antes** hacía una segunda lectura a Firestore en cada request para buscar el
-`hospitalId` del usuario, aunque `get_current_user()` ya lo había leído y
-almacenado en `current_user` durante la verificación del token.
-
-**Ahora** lee directamente de `current_user["hospitalId"]`, eliminando el viaje
-extra a la base de datos. Esto afecta todos los endpoints de:
-`/appointments`, `/hospital-requests`, `/hospital-availability`.
-
-El comportamiento externo no cambió — sigue devolviendo `403` si el usuario no
-tiene hospital asociado.
-
-### Conclusión para el equipo de frontend
-
-> **No envíen `hospital_id` en ningún endpoint.** El backend lo obtiene siempre
-> del token de Firebase. Si lo envían en el body o en query params, simplemente
-> será ignorado (no falla, pero tampoco se usa).
->
-> El único identificador de "otro usuario" que deben enviar es `donor_id` en los
-> endpoints de disponibilidad de turnos y en el endpoint de Vito.
+Al usar grupos como `A+`, `O+` en query params, codificar el `+` como `%2B`.  
+Ejemplo: `?blood_group=O%2B`.

@@ -9,6 +9,8 @@ from app.api.v1.services.hospital_request_service import (
     get_hospital_requests_service,
     update_hospital_request_service,
     get_hospital_request_by_id_service,
+    get_hospital_request_any_service,
+    get_hospital_request_status_service,
 )
 from app.api.v1.services.appointment_service import cancel_appointments_by_request_service
 from app.utils.auth_utils import resolve_hospital_id
@@ -124,7 +126,21 @@ def update_hospital_request_controller(
     return updated_req
 
 
+def get_hospital_request_status_controller(request_id: str) -> dict:
+    req = get_hospital_request_status_service(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+    return req
+
+
 def get_hospital_request_by_id_controller(request_id: str, current_user: dict):
+    # El internal token (Vito) no tiene hospital_id; puede leer cualquier pedido por ID.
+    if current_user.get("uid") == "INTERNAL_SERVICE":
+        req = get_hospital_request_any_service(request_id)
+        if not req:
+            raise HTTPException(status_code=404, detail="HospitalRequest not found")
+        return req
+
     hospital_id = resolve_hospital_id(current_user)
 
     req = get_hospital_request_by_id_service(hospital_id, request_id)

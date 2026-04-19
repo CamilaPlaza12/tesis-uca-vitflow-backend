@@ -2,6 +2,7 @@ from fastapi import HTTPException, status
 import traceback
 
 from app.schemas.donor_schema import DonorCreate, DonorUpdate, AddressValidationIn
+from app.schemas.donor_rejection_schema import DonorRejectionRequest, DonorRejectionOut
 from app.api.v1.services.donor_service import (
     get_donor_by_id_service,
     get_donor_by_dni_service,
@@ -18,6 +19,7 @@ from app.api.v1.services.donor_opportunity_service import (
     get_nearby_donation_opportunities_for_donor_service,
     get_campaigns_for_donor_service,
 )
+from app.api.v1.services.donor_rejection_service import create_donor_rejection_service
 from app.api.v1.services.appointment_service import donor_has_active_appointment_service
 
 
@@ -237,5 +239,33 @@ def get_campaigns_for_donor_controller(dni: str, current_user: dict):
         raise
     except Exception:
         print("[DONOR_CONTROLLER] ERROR en get_campaigns_for_donor_controller")
+        traceback.print_exc()
+        raise
+
+
+def reject_invitation_controller(
+    donor_id: str,
+    body: DonorRejectionRequest,
+    current_user: dict,
+) -> DonorRejectionOut:
+    _require_auth(current_user)
+
+    try:
+        donor = get_donor_by_id_service(donor_id)
+        if not donor:
+            raise HTTPException(status_code=404, detail="Donor not found")
+
+        result = create_donor_rejection_service(
+            donor_id=donor_id,
+            hospital_request_id=body.hospital_request_id,
+            reason=body.reason,
+            notes=body.notes,
+        )
+
+        return DonorRejectionOut(**result)
+    except HTTPException:
+        raise
+    except Exception:
+        print("[DONOR_CONTROLLER] ERROR en reject_invitation_controller")
         traceback.print_exc()
         raise

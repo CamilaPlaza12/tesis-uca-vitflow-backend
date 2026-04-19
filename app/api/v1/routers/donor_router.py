@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.core.security import get_current_user
 from app.schemas.donor_schema import DonorCreate, DonorUpdate, AddressValidationIn
+from app.schemas.donor_rejection_schema import DonorRejectionRequest, DonorRejectionOut
 from app.api.v1.controllers.donor_controller import (
     validate_address_controller,
     create_donor_controller,
@@ -15,6 +16,7 @@ from app.api.v1.controllers.donor_controller import (
     evaluate_donor_eligibility_controller,
     get_nearby_donation_opportunities_for_donor_controller,
     get_campaigns_for_donor_controller,
+    reject_invitation_controller,
 )
 
 router = APIRouter(prefix="/donors", tags=["Donors"])
@@ -99,6 +101,21 @@ async def update_donor_endpoint(
     current_user: dict = Depends(get_current_user),
 ):
     return update_donor_controller(donor_id, body, current_user)
+
+
+@router.post("/{donor_id}/reject-invitation", response_model=DonorRejectionOut)
+async def reject_invitation_endpoint(
+    donor_id: str,
+    body: DonorRejectionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Registra la respuesta de un donante a una invitación de Vito.
+    - not_now: no puede donar en este momento; sigue suscripto.
+    - opt_out: no quiere más avisos; setea is_subscribed = False.
+    - no_response: timeout de 30 minutos sin respuesta; no modifica is_subscribed.
+    """
+    return reject_invitation_controller(donor_id, body, current_user)
 
 
 @router.get("/nearby-for-request/{request_id}", response_model=NearbyDonorsResponse)

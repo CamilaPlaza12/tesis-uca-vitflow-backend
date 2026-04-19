@@ -78,6 +78,24 @@ def get_hospital_request_any_service(request_id: str):
     return data
 
 
+def get_hospital_request_status_service(request_id: str) -> dict | None:
+    doc_ref = db.collection(COLLECTION).document(request_id)
+    snap = doc_ref.get()
+
+    if not snap.exists:
+        return None
+
+    data = snap.to_dict() or {}
+    status = data.get("status", "")
+    is_active = (status == "ACTIVO")
+
+    return {
+        "request_id": request_id,
+        "is_active": is_active,
+        "status": status,
+    }
+
+
 def update_hospital_request_service(hospital_id: str, request_id: str, patch: dict):
     doc_ref = db.collection(COLLECTION).document(request_id)
     snap = doc_ref.get()
