@@ -1,5 +1,13 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 from app.core.config import PROJECT_NAME, API_V1_PREFIX
 from app.api.v1.routers import auth_router, appointment_router, availability_router, blood_bank_router, emails_router, home_router, hospital_onboarding_router, user_router, hospital_request_router, donor_router
