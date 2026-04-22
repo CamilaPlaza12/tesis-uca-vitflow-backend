@@ -9,6 +9,12 @@ from app.schemas.hospital_request_schema import HospitalRequestCreate
 COLLECTION = "hospital_requests"
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
+COMPONENTE_TO_REQUEST_COMPONENT = {
+    "globulos_rojos": "SANGRE",
+    "plaquetas": "PLAQUETAS",
+    "plasma": "PLASMA",
+}
+
 
 def create_hospital_request_service(
     hospital_id: str,
@@ -22,7 +28,6 @@ def create_hospital_request_service(
     data["hospital_id"] = hospital_id
     data["datetime_local"] = now_ba_iso
     data["status"] = "ACTIVO"
-    data["collected_units"] = 0
     data["blood_group"] = normalized_blood_group
     data["component"] = normalized_component
     data["request_type"] = body.request_type
@@ -108,7 +113,6 @@ def update_hospital_request_service(hospital_id: str, request_id: str, patch: di
         raise HTTPException(status_code=404, detail="HospitalRequest not found")
 
     patch.pop("requested_units", None)
-    patch.pop("collected_units", None)
 
     doc_ref.update(patch)
 
@@ -117,12 +121,14 @@ def update_hospital_request_service(hospital_id: str, request_id: str, patch: di
     return updated
 
 
-def find_active_auto_request_by_blood_group_service(hospital_id: str, blood_group: str):
+def find_active_auto_request_by_blood_group_service(hospital_id: str, blood_group: str, componente: str):
+    request_component = COMPONENTE_TO_REQUEST_COMPONENT.get(componente, componente.upper())
     docs = (
         db.collection(COLLECTION)
         .where("hospital_id", "==", hospital_id)
         .where("status", "==", "ACTIVO")
         .where("blood_group", "==", blood_group)
+        .where("component", "==", request_component)
         .where("requested_by", "==", "Sistema")
         .limit(1)
         .stream()
@@ -136,23 +142,22 @@ def find_active_auto_request_by_blood_group_service(hospital_id: str, blood_grou
     return None
 
 
-def create_auto_low_stock_request_service(hospital_id: str, blood_group: str, requested_units: float = 1.0):
+def create_auto_low_stock_request_service(hospital_id: str, blood_group: str, componente: str):
     now_dt = datetime.now(BA_TZ)
     now_iso = now_dt.isoformat()
-    end_date = (now_dt + timedelta(days=7)).isoformat()
+    end_date = (now_dt + timedelta(days=5)).isoformat()
+    request_component = COMPONENTE_TO_REQUEST_COMPONENT.get(componente, componente.upper())
 
     data = {
         "hospital_id": hospital_id,
         "datetime_local": now_iso,
         "hospital_unit": "Guardia",
-        "component": "SANGRE",
+        "component": request_component,
         "blood_group": blood_group,
-        "requested_units": float(requested_units),
-        "collected_units": 0,
         "priority": "URGENTE",
         "status": "ACTIVO",
         "requested_by": "Sistema",
-        "comments": "Pedido automático por bajo stock",
+        "comments": f"Pedido automático por bajo stock de {request_component}",
         "request_type": "NORMAL",
         "end_date": end_date,
     }
@@ -160,3 +165,41 @@ def create_auto_low_stock_request_service(hospital_id: str, blood_group: str, re
     res = db.collection(COLLECTION).add(data)
     doc_ref = res[1] if isinstance(res, (list, tuple)) and len(res) == 2 else res
     return {"id": doc_ref.id, **data}
+
+
+def process_expired_auto_requests_service(hospital_id: str, blood_group: str, componente: str):
+    """
+    Cierra (FINALIZADO) los pedidos automáticos ACTIVOS vencidos para ese blood_group + componente.
+    Retorna cuántos se cerraron.
+    """
+    now_dt = datetime.now(BA_TZ)
+    request_component = COMPONENTE_TO_REQUEST_COMPONENT.get(componente, componente.upper())
+
+    docs = (
+        db.collection(COLLECTION)
+        .where("hospital_id", "==", hospital_id)
+        .where("status", "==", "ACTIVO")
+        .where("blood_group", "==", blood_group)
+        .where("component", "==", request_component)
+        .where("requested_by", "==", "Sistema")
+        .stream()
+    )
+
+    closed = 0
+    for doc in docs:
+        data = doc.to_dict() or {}
+        end_date_str = data.get("end_date", "")
+        if not end_date_str:
+            continue
+        try:
+            end_dt = datetime.fromisoformat(end_date_str)
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=BA_TZ)
+        except Exception:
+            continue
+
+        if end_dt < now_dt:
+            doc.reference.update({"status": "FINALIZADO"})
+            closed += 1
+
+    return closed

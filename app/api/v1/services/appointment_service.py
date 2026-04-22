@@ -4,14 +4,9 @@ from fastapi import HTTPException
 
 from app.firebase.firebase_client import db
 from app.schemas.appointment_schema import AppointmentCreate, AppointmentCreateFromVito, RescheduleAppointmentRequest
-from app.api.v1.services.hospital_request_service import get_hospital_request_by_id_service
 from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service
-from app.api.v1.services.blood_bank_service import add_blood_units_by_group_service
-from app.api.v1.services.blood_bank_service import ensure_auto_request_if_low_service
 
-HOSPITAL_REQUESTS_COLLECTION = "hospital_requests"
 HOSPITALS_COLLECTION = "hospitals"
-DONATION_UNITS_PER_COMPLETED_APPOINTMENT = 0.45
 ACTIVE_APPOINTMENT_STATUSES = {"PROGRAMADO", "CONFIRMADO"}
 
 
@@ -240,42 +235,6 @@ def reschedule_appointment_service(
     data["time_local"] = new_time_str
     data["id"] = appointment_id
     return data
-
-
-def apply_completion_side_effects_service(hospital_id: str, appointment_data: dict):
-    req_id = (appointment_data.get("hospital_request_id") or "").strip()
-    if not req_id:
-        return
-
-    hospital_request = get_hospital_request_by_id_service(hospital_id, req_id)
-    if not hospital_request:
-        return
-
-    blood_group = (hospital_request.get("blood_group") or "").strip().upper()
-    if not blood_group:
-        return
-
-    add_blood_units_by_group_service(hospital_id, blood_group, 450)
-
-    req_status = hospital_request.get("status")
-    if req_status not in {"ACTIVO", "FINALIZADO"}:
-        return
-
-    collected = float(hospital_request.get("collected_units", 0) or 0)
-    requested = float(hospital_request.get("requested_units", 0) or 0)
-    new_collected = round(collected + DONATION_UNITS_PER_COMPLETED_APPOINTMENT, 4)
-
-    patch = {"collected_units": new_collected}
-    completed_now = False
-
-    if requested > 0 and new_collected >= requested:
-        patch["status"] = "COMPLETO"
-        completed_now = True
-
-    db.collection(HOSPITAL_REQUESTS_COLLECTION).document(req_id).update(patch)
-
-    if completed_now and hospital_request.get("requested_by") == "Sistema":
-        ensure_auto_request_if_low_service(hospital_id, blood_group)
 
 
 def reschedule_appointment_with_slots_service(

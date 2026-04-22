@@ -18,7 +18,6 @@ class HospitalRequestCreate(BaseModel):
     hospital_unit: HospitalUnit
     component: str = Field(..., min_length=1, max_length=100)
     blood_group: str = Field(..., min_length=2, max_length=4)
-    requested_units: float = Field(..., gt=0, le=20)
     priority: HospitalRequestPriority
     requested_by: str = Field(..., min_length=1, max_length=100)
     comments: Optional[str] = Field(None, max_length=500)
@@ -32,8 +31,6 @@ class HospitalRequest(BaseModel):
     hospital_unit: HospitalUnit
     component: str
     blood_group: str
-    requested_units: float
-    collected_units: float = 0.0
     priority: HospitalRequestPriority
     status: HospitalRequestStatus
     requested_by: str

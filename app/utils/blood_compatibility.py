@@ -22,3 +22,11 @@ def can_donate_to_request(donor_blood_group: str, request_blood_group: str, comp
         return req_bg in RED_BLOOD_CELL_COMPATIBILITY.get(donor_bg, set())
 
     return donor_bg == req_bg
+
+
+def is_exact_blood_match(donor_blood_group: str, request_blood_group: str) -> bool:
+    donor_bg = (donor_blood_group or "").strip().upper()
+    req_bg = (request_blood_group or "").strip().upper()
+    if not donor_bg or not req_bg:
+        return False
+    return donor_bg == req_bg

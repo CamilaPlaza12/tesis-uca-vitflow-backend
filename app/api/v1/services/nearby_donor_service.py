@@ -3,7 +3,7 @@ import logging
 from fastapi import HTTPException
 from app.firebase.firebase_client import db
 from app.utils.distance import haversine_km
-from app.utils.blood_compatibility import can_donate_to_request
+from app.utils.blood_compatibility import can_donate_to_request, is_exact_blood_match
 
 logger = logging.getLogger("vitflow.nearby_donors")
 
@@ -31,6 +31,7 @@ def get_nearby_donors_for_request_service(
 
     blood_group = (req.get("blood_group") or "").strip().upper()
     component = (req.get("component") or "SANGRE").strip().upper()
+    exact_match = req.get("requested_by") == "Sistema"
     if not blood_group:
         raise HTTPException(status_code=409, detail="HospitalRequest has no blood_group")
 
@@ -80,7 +81,12 @@ def get_nearby_donors_for_request_service(
             bool(donor.get("geo")),
         )
 
-        if not can_donate_to_request(donor_bg, blood_group, component):
+        compatible = (
+            is_exact_blood_match(donor_bg, blood_group)
+            if exact_match
+            else can_donate_to_request(donor_bg, blood_group, component)
+        )
+        if not compatible:
             logger.info(
                 "[NEARBY]   → EXCLUIDO (incompatible: %s no puede donar a %s/%s)",
                 donor_bg, blood_group, component,

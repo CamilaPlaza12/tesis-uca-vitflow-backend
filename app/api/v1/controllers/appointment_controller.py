@@ -21,7 +21,6 @@ from app.api.v1.services.appointment_service import (
     search_appointments_by_range_service,
     update_appointment_status_service,
     update_appointment_status_any_service,
-    apply_completion_side_effects_service,
     reschedule_appointment_with_slots_service,
     reschedule_appointment_any_with_slots_service,
     donor_has_active_appointment_service,
@@ -43,6 +42,7 @@ from app.api.v1.services.donor_service import (
 )
 from app.api.v1.services.donor_eligibility_service import evaluate_donor_eligibility_service
 from app.api.v1.services.stock_service import crear_unidad_service
+from app.api.v1.services.blood_bank_service import add_blood_units_by_group_service
 from app.schemas.stock_schema import UnidadCreate
 from app.utils.auth_utils import resolve_hospital_id
 
@@ -306,11 +306,6 @@ def update_appointment_status_controller(appointment_id: str, body: UpdateAppoin
                 old_date = datetime.fromisoformat(date_str).date()
                 release_slot_service(hospital_id, old_date, time_str)
 
-        if new_status == "COMPLETADO" and current_status != "COMPLETADO":
-            hospital_id = updated.get("hospital_id")
-            if hospital_id:
-                apply_completion_side_effects_service(hospital_id, updated)
-
         return updated
 
     hospital_id = resolve_hospital_id(current_user)
@@ -340,9 +335,6 @@ def update_appointment_status_controller(appointment_id: str, body: UpdateAppoin
         if date_str and time_str:
             old_date = datetime.fromisoformat(date_str).date()
             release_slot_service(hospital_id, old_date, time_str)
-
-    if new_status == "COMPLETADO" and current_status != "COMPLETADO":
-        apply_completion_side_effects_service(hospital_id, updated)
 
     return updated
 
@@ -571,8 +563,8 @@ def confirmar_asistencia_controller(
     """
     Acción unificada de "Marcar asistencia":
     1. Cambia el turno a COMPLETADO (desde PROGRAMADO o CONFIRMADO).
-    2. Crea una unidad de componente por cada ítem en body.componentes.
-    3. Dispara los side-effects de completado (actualiza collected_units del pedido).
+    2. Suma 450 unidades al stock del grupo sanguíneo.
+    3. Crea una unidad de componente por cada ítem en body.componentes.
     """
     _require_auth(current_user)
     hospital_id = resolve_hospital_id(current_user)
@@ -596,8 +588,7 @@ def confirmar_asistencia_controller(
     if not updated:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
-    # Side-effects: actualizar collected_units en el pedido hospitalario
-    apply_completion_side_effects_service(hospital_id, updated)
+    add_blood_units_by_group_service(hospital_id, body.blood_group, 450)
 
     # Crear una unidad por cada componente seleccionado
     donante_id = existing.get("donor_id")  # presente en turnos Vito, None en manuales

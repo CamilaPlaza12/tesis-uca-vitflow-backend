@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import HTTPException
 from google.cloud import firestore
 from google.cloud.firestore import Transaction
@@ -5,7 +7,10 @@ from google.cloud.firestore import Transaction
 from app.api.v1.services.hospital_request_service import (
     find_active_auto_request_by_blood_group_service,
     create_auto_low_stock_request_service,
+    process_expired_auto_requests_service,
 )
+
+logger = logging.getLogger("vitflow.blood_bank")
 
 from app.firebase.firebase_client import db
 from app.schemas.blood_bank_schema import (
@@ -17,55 +22,59 @@ from app.schemas.blood_bank_schema import (
 )
 
 BLOOD_BANKS_COLLECTION = "blood_banks"
+COLECCION_UMBRALES = "stock_umbrales"
 
 def _bank_ref(hospital_id: str):
     return db.collection(BLOOD_BANKS_COLLECTION).document(hospital_id)
 
-def ensure_auto_request_if_low_service(hospital_id: str, blood_group: str):
+def ensure_auto_request_if_low_service(hospital_id: str, componente: str, blood_group: str):
     """
-    Si stock <= threshold para ese blood_group:
-    - si NO existe request ACTIVO con requested_by="Sistema" -> crea uno URGENTE
+    Si las unidades disponibles de `componente` + `blood_group` < umbral_minimo configurado:
+    - si NO existe request ACTIVO del Sistema para ese componente+grupo → crea uno URGENTE de 5 días
+    Funciona para globulos_rojos, plasma y plaquetas.
     """
-    ref = _bank_ref(hospital_id)
-    snap = ref.get()
-    if not snap.exists:
-        return
-
-    data = snap.to_dict() or {}
-    stocks = data.get("stocks_units") or {}
-    thresholds = data.get("thresholds_units") or {}
-
-    # si el hospital no definió threshold para ese RH -> NO hacemos nada
-    if blood_group not in thresholds:
-        return
-
-    try:
-        stock_units = int(stocks.get(blood_group, 0) or 0)
-        thr_units = int(thresholds.get(blood_group, 0) or 0)
-    except Exception:
-        return
-    
-    if thr_units <= 0:
-        return
-    
-    if stock_units >= thr_units:
-        return
-
-    existing = find_active_auto_request_by_blood_group_service(hospital_id, blood_group)
-    if existing:
-        return
-
-    missing_units = thr_units - stock_units
-    if missing_units <= 0:
-        return
-
-    requested_units = missing_units / 1000.0  # EXACTO lo que falta
-
-    create_auto_low_stock_request_service(
-        hospital_id,
-        blood_group,
-        requested_units=requested_units,
+    umbral_docs = list(
+        db.collection(COLECCION_UMBRALES)
+        .where("hospital_id", "==", hospital_id)
+        .where("componente", "==", componente)
+        .where("blood_group", "==", blood_group)
+        .limit(1)
+        .stream()
     )
+    if not umbral_docs:
+        logger.info("[AUTO-REQUEST] no hay umbral para %s/%s/%s → skip", hospital_id, componente, blood_group)
+        return
+
+    umbral_minimo = int((umbral_docs[0].to_dict() or {}).get("umbral_minimo", 0) or 0)
+    if umbral_minimo <= 0:
+        logger.info("[AUTO-REQUEST] umbral_minimo=0 para %s/%s/%s → skip", hospital_id, componente, blood_group)
+        return
+
+    stock_count = len(list(
+        db.collection(componente)
+        .where("hospital_id", "==", hospital_id)
+        .where("blood_group", "==", blood_group)
+        .where("estado", "==", "disponible")
+        .stream()
+    ))
+
+    logger.info("[AUTO-REQUEST] hospital=%s componente=%s blood_group=%s disponibles=%d umbral=%d",
+                hospital_id, componente, blood_group, stock_count, umbral_minimo)
+
+    if stock_count >= umbral_minimo:
+        logger.info("[AUTO-REQUEST] disponibles(%d) >= umbral(%d) → skip", stock_count, umbral_minimo)
+        return
+
+    process_expired_auto_requests_service(hospital_id, blood_group, componente)
+
+    existing = find_active_auto_request_by_blood_group_service(hospital_id, blood_group, componente)
+    if existing:
+        logger.info("[AUTO-REQUEST] ya existe pedido activo id=%s → skip", existing.get("id"))
+        return
+
+    logger.info("[AUTO-REQUEST] creando pedido para %s/%s/%s (disponibles=%d < umbral=%d)",
+                hospital_id, componente, blood_group, stock_count, umbral_minimo)
+    create_auto_low_stock_request_service(hospital_id, blood_group, componente)
 
 
 
@@ -137,7 +146,6 @@ def add_stock_service(hospital_id: str, body: BloodBankAdjustRequest) -> BloodBa
 
     tx = db.transaction()
     new_stocks = _tx(tx)
-    ensure_auto_request_if_low_service(hospital_id, body.blood_type)
     return BloodBankOut(hospital_id=hospital_id, stocks_units=new_stocks)
 
 def remove_stock_service(hospital_id: str, body: BloodBankAdjustRequest) -> BloodBankOut:
@@ -169,7 +177,6 @@ def remove_stock_service(hospital_id: str, body: BloodBankAdjustRequest) -> Bloo
 
     tx = db.transaction()
     new_stocks = _tx(tx)
-    ensure_auto_request_if_low_service(hospital_id, body.blood_type)
     return BloodBankOut(hospital_id=hospital_id, stocks_units=new_stocks)
 
 
@@ -203,7 +210,6 @@ def add_blood_units_by_group_service(hospital_id: str, blood_group: str, amount_
 
     tx = db.transaction()
     new_stocks = _tx(tx)
-    ensure_auto_request_if_low_service(hospital_id, blood_group)
     return {"hospital_id": hospital_id, "stocks_units": new_stocks}
 
 def update_thresholds_service(hospital_id: str, body: BloodBankThresholdsUpdateRequest) -> BloodBankOut:

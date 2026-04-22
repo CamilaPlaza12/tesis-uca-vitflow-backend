@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from app.firebase.firebase_client import db
 from app.api.v1.services.donor_service import get_donor_by_dni_service
 from app.api.v1.services.donor_eligibility_service import evaluate_donor_eligibility_service
-from app.utils.blood_compatibility import can_donate_to_request
+from app.utils.blood_compatibility import can_donate_to_request, is_exact_blood_match
 from app.utils.distance import haversine_km
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
@@ -112,7 +112,15 @@ def get_nearby_donation_opportunities_for_donor_service(dni: str, radius_km: flo
         if not end_dt or end_dt < now_ba:
             continue
 
-        if not can_donate_to_request(donor_bg, req.get("blood_group"), req.get("component")):
+        req_bg = req.get("blood_group")
+        req_component = req.get("component")
+        is_auto = req.get("requested_by") == "Sistema"
+        compatible = (
+            is_exact_blood_match(donor_bg, req_bg)
+            if is_auto
+            else can_donate_to_request(donor_bg, req_bg, req_component)
+        )
+        if not compatible:
             continue
 
         hospital = _get_hospital(req.get("hospital_id"))
@@ -189,7 +197,15 @@ def get_campaigns_for_donor_service(dni: str):
         if not end_dt or end_dt < now_ba:
             continue
 
-        if not can_donate_to_request(donor_bg, req.get("blood_group"), req.get("component")):
+        req_bg = req.get("blood_group")
+        req_component = req.get("component")
+        is_auto = req.get("requested_by") == "Sistema"
+        compatible = (
+            is_exact_blood_match(donor_bg, req_bg)
+            if is_auto
+            else can_donate_to_request(donor_bg, req_bg, req_component)
+        )
+        if not compatible:
             continue
 
         hospital = _get_hospital(req.get("hospital_id"))

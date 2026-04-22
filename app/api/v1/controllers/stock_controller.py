@@ -19,6 +19,7 @@ from app.schemas.stock_schema import (
     UnidadPatch,
     ResumenOut,
 )
+from app.api.v1.services.blood_bank_service import ensure_auto_request_if_low_service
 from app.api.v1.services.stock_service import (
     actualizar_umbral_service,
     actualizar_unidad_service,
@@ -106,8 +107,7 @@ def retirar_bulk_controller(
     unidades = marcar_usado_bulk_service(
         componente, body.unidad_ids, hospital_id, body.motivo, body.motivo_detalle
     )
-    # Determinar blood_group desde la primera unidad (todas son del mismo grupo en un retiro bulk)
-    blood_group = unidades[0].blood_group if unidades else "O+"
+    blood_group = unidades[0].blood_group if unidades else None
     registrar_historial_service(
         hospital_id=hospital_id,
         usuario_id=current_user["uid"],
@@ -120,6 +120,8 @@ def retirar_bulk_controller(
         motivo=body.motivo,
         motivo_detalle=body.motivo_detalle,
     )
+    if blood_group:
+        ensure_auto_request_if_low_service(hospital_id, componente, blood_group)
     return unidades
 
 
@@ -193,19 +195,23 @@ def retirar_unidad_controller(
 ) -> UnidadOut:
     _validate_componente(componente)
     hospital_id = _get_hospital_id(current_user)
-    return marcar_usado_service(
+    unidad = marcar_usado_service(
         componente,
         unidad_id,
         hospital_id,
         motivo=body.motivo if body else None,
         motivo_detalle=body.motivo_detalle if body else None,
     )
+    ensure_auto_request_if_low_service(hospital_id, componente, unidad.blood_group)
+    return unidad
 
 
 def vencer_unidad_controller(componente: str, unidad_id: str, current_user: dict) -> UnidadOut:
     _validate_componente(componente)
     hospital_id = _get_hospital_id(current_user)
-    return marcar_vencido_service(componente, unidad_id, hospital_id)
+    unidad = marcar_vencido_service(componente, unidad_id, hospital_id)
+    ensure_auto_request_if_low_service(hospital_id, componente, unidad.blood_group)
+    return unidad
 
 
 def listar_disponibles_controller(
