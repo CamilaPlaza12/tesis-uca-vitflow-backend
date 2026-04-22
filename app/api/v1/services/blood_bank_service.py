@@ -9,6 +9,7 @@ from app.api.v1.services.hospital_request_service import (
     create_auto_low_stock_request_service,
     process_expired_auto_requests_service,
 )
+from app.api.v1.services.vito_notification_service import notify_vito_for_new_request
 
 logger = logging.getLogger("vitflow.blood_bank")
 
@@ -74,7 +75,8 @@ def ensure_auto_request_if_low_service(hospital_id: str, componente: str, blood_
 
     logger.info("[AUTO-REQUEST] creando pedido para %s/%s/%s (disponibles=%d < umbral=%d)",
                 hospital_id, componente, blood_group, stock_count, umbral_minimo)
-    create_auto_low_stock_request_service(hospital_id, blood_group, componente)
+    new_request = create_auto_low_stock_request_service(hospital_id, blood_group, componente)
+    notify_vito_for_new_request(hospital_id, new_request["id"])
 
 
 
