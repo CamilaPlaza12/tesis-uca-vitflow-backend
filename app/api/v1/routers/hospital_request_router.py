@@ -11,6 +11,7 @@ from app.api.v1.controllers.hospital_request_controller import (
     update_hospital_request_controller,
     get_hospital_request_by_id_controller,
     get_hospital_request_status_controller,
+    get_available_blood_groups_controller,
 )
 from app.api.v1.services.vito_notification_service import notify_vito_for_new_request
 from app.utils.auth_utils import resolve_hospital_id
@@ -52,6 +53,14 @@ async def get_hospital_requests_endpoint(
     current_user: dict = Depends(get_current_user),
 ):
     return get_hospital_requests_controller(current_user)
+
+# Ruta estática: debe ir ANTES de /{request_id} para evitar conflictos
+@router.get("/tipos-sangre-disponibles")
+async def get_tipos_sangre_disponibles_endpoint(
+    componente: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_available_blood_groups_controller(componente, current_user)
 
 @router.patch("/{request_id}")
 async def update_hospital_request_endpoint(

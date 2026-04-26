@@ -12,6 +12,11 @@ HOSPITAL_REQUESTS_COLLECTION = "hospital_requests"
 DONORS_COLLECTION = "donors"
 
 
+def _build_evento_blood_types(blood_groups_raw: list, factores_rh: list) -> set:
+    """Construye el conjunto de tipos completos para pedidos EVENTO (ej: A + + → A+)."""
+    return {f"{g.upper()}{f}" for g in blood_groups_raw for f in factores_rh}
+
+
 def get_nearby_donors_for_request_service(
     hospital_id: str,
     request_id: str,
@@ -31,13 +36,33 @@ def get_nearby_donors_for_request_service(
 
     blood_group = (req.get("blood_group") or "").strip().upper()
     component = (req.get("component") or "SANGRE").strip().upper()
-    exact_match = req.get("requested_by") == "Sistema"
+    tipo = (req.get("tipo") or "").strip().lower()
+
     if not blood_group:
         raise HTTPException(status_code=409, detail="HospitalRequest has no blood_group")
 
+    # Determinar modo de matching (con compatibilidad hacia datos sin campo `tipo`)
+    if tipo == "evento" or blood_group == "MULTIPLE":
+        matching_mode = "evento"
+    elif tipo == "automatico" or req.get("requested_by") == "Sistema":
+        matching_mode = "automatico"
+    else:
+        matching_mode = "manual"
+
+    # Datos adicionales para modo EVENTO
+    evento_blood_types: set = set()
+    if matching_mode == "evento":
+        blood_groups_raw = req.get("blood_groups", [])
+        factores_rh = req.get("factores_rh", [])
+        evento_blood_types = _build_evento_blood_types(blood_groups_raw, factores_rh)
+        logger.info(
+            "[NEARBY] Pedido EVENTO — request_id=%s grupos_sanguineos=%s factores_rh=%s tipos_completos=%s",
+            request_id, blood_groups_raw, factores_rh, sorted(evento_blood_types),
+        )
+
     logger.info(
-        "[NEARBY] Buscando donantes para request_id=%s blood_group=%s component=%s radius_km=%s",
-        request_id, blood_group, component, radius_km,
+        "[NEARBY] Buscando donantes para request_id=%s blood_group=%s component=%s radius_km=%s matching_mode=%s",
+        request_id, blood_group, component, radius_km, matching_mode,
     )
 
     # 2) buscar hospital
@@ -56,7 +81,7 @@ def get_nearby_donors_for_request_service(
     if hospital_lat is None or hospital_lng is None:
         raise HTTPException(status_code=409, detail="Hospital has no geo coordinates")
 
-    # 3) traer TODOS los donors y filtrar por compatibilidad
+    # 3) traer TODOS los donors y filtrar
     donor_docs = list(db.collection(DONORS_COLLECTION).stream())
 
     logger.info(
@@ -81,15 +106,17 @@ def get_nearby_donors_for_request_service(
             bool(donor.get("geo")),
         )
 
-        compatible = (
-            is_exact_blood_match(donor_bg, blood_group)
-            if exact_match
-            else can_donate_to_request(donor_bg, blood_group, component)
-        )
+        if matching_mode == "evento":
+            compatible = donor_bg in evento_blood_types
+        elif matching_mode == "automatico":
+            compatible = is_exact_blood_match(donor_bg, blood_group)
+        else:
+            compatible = can_donate_to_request(donor_bg, blood_group, component)
+
         if not compatible:
             logger.info(
-                "[NEARBY]   → EXCLUIDO (incompatible: %s no puede donar a %s/%s)",
-                donor_bg, blood_group, component,
+                "[NEARBY]   → EXCLUIDO (incompatible: %s no puede donar — modo=%s)",
+                donor_bg, matching_mode,
             )
             continue
 
@@ -160,10 +187,16 @@ def get_nearby_donors_for_request_service(
 
     donors.sort(key=lambda d: d["distance_km"])
 
-    logger.info(
-        "[NEARBY] Resultado final — request_id=%s total_incluidos=%d",
-        request_id, len(donors),
-    )
+    if matching_mode == "evento":
+        logger.info(
+            "[NEARBY] Resultado EVENTO — request_id=%s tipos_buscados=%s donantes_dentro_radio=%d notificaciones_a_enviar=%d",
+            request_id, sorted(evento_blood_types), len(donors), len(donors),
+        )
+    else:
+        logger.info(
+            "[NEARBY] Resultado final — request_id=%s matching_mode=%s total_incluidos=%d",
+            request_id, matching_mode, len(donors),
+        )
 
     return {
         "hospital_request_id": request_id,

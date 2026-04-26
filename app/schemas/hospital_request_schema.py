@@ -4,6 +4,7 @@ from typing import Literal, Optional
 HospitalRequestPriority = Literal["NORMAL", "URGENTE", "CRITICA"]
 HospitalRequestStatus = Literal["ACTIVO", "COMPLETO", "CANCELADO", "FINALIZADO"]
 HospitalRequestType = Literal["NORMAL", "CAMPAÑA"]
+PedidoTipo = Literal["manual", "automatico", "evento"]
 
 HospitalUnit = Literal[
     "ITU",
@@ -23,6 +24,7 @@ class HospitalRequestCreate(BaseModel):
     comments: Optional[str] = Field(None, max_length=500)
 
     request_type: HospitalRequestType = "NORMAL"
+    tipo: PedidoTipo = "manual"
     end_date: str = Field(..., min_length=10, max_length=40)
 
 
@@ -37,6 +39,7 @@ class HospitalRequest(BaseModel):
     comments: Optional[str] = None
 
     request_type: HospitalRequestType = "NORMAL"
+    tipo: PedidoTipo = "manual"
     end_date: str
 
 
@@ -55,4 +58,5 @@ class UpdateHospitalRequestRequest(BaseModel):
     comments: Optional[str] = Field(None, max_length=500)
 
     request_type: Optional[HospitalRequestType] = None
+    tipo: Optional[PedidoTipo] = None
     end_date: Optional[str] = Field(None, min_length=10, max_length=40)

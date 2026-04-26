@@ -15,6 +15,8 @@ COMPONENTE_TO_REQUEST_COMPONENT = {
     "plasma": "PLASMA",
 }
 
+ALL_BLOOD_GROUPS = ["O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"]
+
 
 def create_hospital_request_service(
     hospital_id: str,
@@ -159,6 +161,7 @@ def create_auto_low_stock_request_service(hospital_id: str, blood_group: str, co
         "requested_by": "Sistema",
         "comments": f"Pedido automático por bajo stock de {request_component}",
         "request_type": "NORMAL",
+        "tipo": "automatico",
         "end_date": end_date,
     }
 
@@ -203,3 +206,36 @@ def process_expired_auto_requests_service(hospital_id: str, blood_group: str, co
             closed += 1
 
     return closed
+
+
+def find_active_manual_request_service(hospital_id: str, blood_group: str, component: str):
+    docs = (
+        db.collection(COLLECTION)
+        .where("hospital_id", "==", hospital_id)
+        .where("status", "==", "ACTIVO")
+        .where("blood_group", "==", blood_group)
+        .where("component", "==", component)
+        .where("tipo", "==", "manual")
+        .limit(1)
+        .stream()
+    )
+    for doc in docs:
+        data = doc.to_dict() or {}
+        data["id"] = doc.id
+        return data
+    return None
+
+
+def get_available_blood_groups_service(hospital_id: str, component: str) -> dict:
+    docs = (
+        db.collection(COLLECTION)
+        .where("hospital_id", "==", hospital_id)
+        .where("status", "==", "ACTIVO")
+        .where("component", "==", component)
+        .where("tipo", "==", "manual")
+        .stream()
+    )
+    occupied = {(doc.to_dict() or {}).get("blood_group", "") for doc in docs}
+    disponibles = [bg for bg in ALL_BLOOD_GROUPS if bg not in occupied]
+    no_disponibles = [bg for bg in ALL_BLOOD_GROUPS if bg in occupied]
+    return {"disponibles": disponibles, "no_disponibles": no_disponibles}

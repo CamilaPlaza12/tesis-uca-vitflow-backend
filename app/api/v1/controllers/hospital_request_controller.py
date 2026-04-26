@@ -11,6 +11,8 @@ from app.api.v1.services.hospital_request_service import (
     get_hospital_request_by_id_service,
     get_hospital_request_any_service,
     get_hospital_request_status_service,
+    find_active_manual_request_service,
+    get_available_blood_groups_service,
 )
 from app.api.v1.services.appointment_service import cancel_appointments_by_request_service
 from app.utils.auth_utils import resolve_hospital_id
@@ -53,6 +55,14 @@ def create_hospital_request_controller(body: HospitalRequestCreate, current_user
     now_ba = datetime.now(BA_TZ)
     if end_dt <= now_ba:
         raise HTTPException(status_code=400, detail="end_date must be in the future")
+
+    if body.tipo == "manual":
+        existing = find_active_manual_request_service(hospital_id, blood_group, component)
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail="Ya existe un pedido activo manual para este tipo de sangre y componente",
+            )
 
     now_ba_iso = now_ba.isoformat(timespec="seconds")
 
@@ -148,3 +158,14 @@ def get_hospital_request_by_id_controller(request_id: str, current_user: dict):
         raise HTTPException(status_code=404, detail="HospitalRequest not found")
 
     return req
+
+
+def get_available_blood_groups_controller(componente: str, current_user: dict) -> dict:
+    hospital_id = resolve_hospital_id(current_user)
+    component = componente.strip().upper()
+    if component not in VALID_COMPONENTS:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid component (use SANGRE / PLAQUETAS / MEDULA_OSEA)",
+        )
+    return get_available_blood_groups_service(hospital_id, component)
