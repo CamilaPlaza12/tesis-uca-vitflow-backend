@@ -51,6 +51,23 @@ def _lookup_donante_nombre(dni: str) -> str | None:
     return None
 
 
+def sync_evento_cancelado_by_pedido_id(pedido_id: str) -> bool:
+    """Set estado=CANCELADO on the evento linked to pedido_id. Returns True if found."""
+    docs = (
+        db.collection(COLLECTION_EVENTOS)
+        .where("pedido_id", "==", pedido_id)
+        .limit(1)
+        .stream()
+    )
+    for doc in docs:
+        db.collection(COLLECTION_EVENTOS).document(doc.id).update({
+            "estado": "CANCELADO",
+            "updated_at": _now_ba_iso(),
+        })
+        return True
+    return False
+
+
 def create_evento_service(hospital_id: str, body: EventoCreate) -> dict:
     now_iso = _now_ba_iso()
 

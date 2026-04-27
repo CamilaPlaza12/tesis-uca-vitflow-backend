@@ -365,9 +365,10 @@ def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id
         snap.reference.update({"status": "CANCELADO"})
         cancelled += 1
 
-        donor_id = appt.get("donor_id")
-        if donor_id:
-            donor_ids.append(donor_id)
+        if appt.get("source") == "VITO_WHATSAPP":
+            donor_id = appt.get("donor_id")
+            if donor_id:
+                donor_ids.append(donor_id)
 
     return {"cancelled_count": cancelled, "donor_ids": donor_ids}
 

@@ -15,6 +15,7 @@ from app.api.v1.services.hospital_request_service import (
     get_available_blood_groups_service,
 )
 from app.api.v1.services.appointment_service import cancel_appointments_by_request_service
+from app.api.v1.services.evento_service import sync_evento_cancelado_by_pedido_id
 from app.utils.auth_utils import resolve_hospital_id
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
@@ -107,10 +108,10 @@ def update_hospital_request_controller(
             detail="FINALIZADO requests cannot be edited (only automatic transition to COMPLETO)",
         )
 
-    if patch.get("status") in {"COMPLETO", "CANCELADO"}:
+    if patch.get("status") == "COMPLETO":
         raise HTTPException(
             status_code=400,
-            detail="Use the dedicated /cancel endpoint to cancel. COMPLETO is set automatically.",
+            detail="COMPLETO status is automatic and cannot be set manually",
         )
 
     if "end_date" in patch and patch["end_date"] is not None:
@@ -119,6 +120,8 @@ def update_hospital_request_controller(
         if end_dt <= now_ba:
             raise HTTPException(status_code=400, detail="end_date must be in the future")
 
+    is_cancelling = patch.get("status") == "CANCELADO" and existing_status != "CANCELADO"
+
     if "comments" in patch:
         c = (patch["comments"] or "").strip()
         patch["comments"] = c or None
@@ -126,7 +129,12 @@ def update_hospital_request_controller(
     if not patch:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    return update_hospital_request_service(hospital_id, request_id, patch)
+    updated_req = update_hospital_request_service(hospital_id, request_id, patch)
+
+    if is_cancelling:
+        cancel_appointments_by_request_service(hospital_id, request_id)
+
+    return updated_req
 
 
 def cancel_hospital_request_controller(request_id: str, current_user: dict) -> dict:
@@ -147,9 +155,16 @@ def cancel_hospital_request_controller(request_id: str, current_user: dict) -> d
             detail=f"Cannot cancel a request in {current_status} status",
         )
 
+    # Step 1: cancel the request
     update_hospital_request_service(hospital_id, request_id, {"status": "CANCELADO"})
 
+    # Step 2-5: cancel appointments, collect VITO_WHATSAPP donor ids
     result = cancel_appointments_by_request_service(hospital_id, request_id)
+
+    # Step 6: sync related evento (evento.estado is a write-through cache of the request state)
+    # If no evento exists for this request (non-EVENTO requests), skip silently.
+    # If the update fails, raise immediately — callers must not assume success.
+    sync_evento_cancelado_by_pedido_id(request_id)
 
     return {
         "id": request_id,
