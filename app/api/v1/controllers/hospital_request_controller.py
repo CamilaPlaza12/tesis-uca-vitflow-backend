@@ -107,10 +107,10 @@ def update_hospital_request_controller(
             detail="FINALIZADO requests cannot be edited (only automatic transition to COMPLETO)",
         )
 
-    if patch.get("status") == "COMPLETO":
+    if patch.get("status") in {"COMPLETO", "CANCELADO"}:
         raise HTTPException(
             status_code=400,
-            detail="COMPLETO status is automatic and cannot be set manually",
+            detail="Use the dedicated /cancel endpoint to cancel. COMPLETO is set automatically.",
         )
 
     if "end_date" in patch and patch["end_date"] is not None:
@@ -119,8 +119,6 @@ def update_hospital_request_controller(
         if end_dt <= now_ba:
             raise HTTPException(status_code=400, detail="end_date must be in the future")
 
-    is_cancelling = patch.get("status") == "CANCELADO" and existing_status != "CANCELADO"
-
     if "comments" in patch:
         c = (patch["comments"] or "").strip()
         patch["comments"] = c or None
@@ -128,12 +126,37 @@ def update_hospital_request_controller(
     if not patch:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    updated_req = update_hospital_request_service(hospital_id, request_id, patch)
+    return update_hospital_request_service(hospital_id, request_id, patch)
 
-    if is_cancelling:
-        cancel_appointments_by_request_service(hospital_id, request_id)
 
-    return updated_req
+def cancel_hospital_request_controller(request_id: str, current_user: dict) -> dict:
+    hospital_id = resolve_hospital_id(current_user)
+
+    existing = get_hospital_request_by_id_service(hospital_id, request_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    current_status = existing.get("status")
+
+    if current_status == "CANCELADO":
+        raise HTTPException(status_code=409, detail="HospitalRequest is already canceled")
+
+    if current_status in {"COMPLETO", "FINALIZADO"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot cancel a request in {current_status} status",
+        )
+
+    update_hospital_request_service(hospital_id, request_id, {"status": "CANCELADO"})
+
+    result = cancel_appointments_by_request_service(hospital_id, request_id)
+
+    return {
+        "id": request_id,
+        "status": "CANCELADO",
+        "cancelled_appointments": result["cancelled_count"],
+        "donor_ids_to_notify": result["donor_ids"],
+    }
 
 
 def get_hospital_request_status_controller(request_id: str) -> dict:

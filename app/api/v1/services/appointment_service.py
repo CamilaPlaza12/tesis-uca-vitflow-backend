@@ -334,7 +334,7 @@ def reschedule_appointment_any_with_slots_service(
     return data
 
 
-def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id: str) -> int:
+def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id: str) -> dict:
     docs = (
         db.collection("appointments")
         .where("hospital_id", "==", hospital_id)
@@ -343,6 +343,7 @@ def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id
     )
 
     cancelled = 0
+    donor_ids: list[str] = []
 
     for snap in docs:
         appt = snap.to_dict() or {}
@@ -364,7 +365,11 @@ def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id
         snap.reference.update({"status": "CANCELADO"})
         cancelled += 1
 
-    return cancelled
+        donor_id = appt.get("donor_id")
+        if donor_id:
+            donor_ids.append(donor_id)
+
+    return {"cancelled_count": cancelled, "donor_ids": donor_ids}
 
 
 def search_appointments_by_range_service(hospital_id: str, desde: date, hasta: date):

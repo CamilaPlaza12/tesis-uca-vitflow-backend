@@ -118,3 +118,34 @@ def notify_vito_for_new_request(hospital_id: str, request_id: str) -> None:
             request_id,
             exc,
         )
+
+
+def notify_vito_for_canceled_request(
+    hospital_id: str,
+    request_id: str,
+    donor_ids: list[str],
+) -> None:
+    """
+    Background task: notifica a Vito que un pedido fue cancelado.
+    Incluye la lista de donor_ids afectados para que Vito pueda avisar a los donantes.
+    La integración HTTP con Vito aún no está implementada — por ahora solo se loguea el payload.
+    """
+    payload = {
+        "type": "REQUEST_CANCELED",
+        "request_id": request_id,
+        "hospital_id": hospital_id,
+        "donor_ids": donor_ids,
+    }
+
+    logger.info(
+        "[VITO][CANCEL] Pedido cancelado — request_id=%s hospital_id=%s donors_afectados=%d payload=%s",
+        request_id,
+        hospital_id,
+        len(donor_ids),
+        payload,
+    )
+
+    # TODO: enviar HTTP POST a VITO_CANCEL_URL cuando el endpoint de Vito esté disponible.
+    # Ejemplo:
+    #   response = httpx.post(VITO_CANCEL_URL, json=payload, timeout=VITO_NOTIFY_TIMEOUT)
+    #   response.raise_for_status()

@@ -12,8 +12,12 @@ from app.api.v1.controllers.hospital_request_controller import (
     get_hospital_request_by_id_controller,
     get_hospital_request_status_controller,
     get_available_blood_groups_controller,
+    cancel_hospital_request_controller,
 )
-from app.api.v1.services.vito_notification_service import notify_vito_for_new_request
+from app.api.v1.services.vito_notification_service import (
+    notify_vito_for_new_request,
+    notify_vito_for_canceled_request,
+)
 from app.utils.auth_utils import resolve_hospital_id
 
 logger = logging.getLogger("vitflow.hospital_request")
@@ -61,6 +65,30 @@ async def get_tipos_sangre_disponibles_endpoint(
     current_user: dict = Depends(get_current_user),
 ):
     return get_available_blood_groups_controller(componente, current_user)
+
+@router.post("/{request_id}/cancel")
+async def cancel_hospital_request_endpoint(
+    request_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    result = cancel_hospital_request_controller(request_id, current_user)
+
+    hospital_id = resolve_hospital_id(current_user)
+    donor_ids = result.get("donor_ids_to_notify", [])
+
+    logger.info(
+        "[PEDIDO][CANCEL] Pedido cancelado — request_id=%s hospital_id=%s cancelled_appointments=%d donors_a_notificar=%d",
+        request_id,
+        hospital_id,
+        result.get("cancelled_appointments", 0),
+        len(donor_ids),
+    )
+
+    background_tasks.add_task(notify_vito_for_canceled_request, hospital_id, request_id, donor_ids)
+
+    return result
+
 
 @router.patch("/{request_id}")
 async def update_hospital_request_endpoint(
