@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, time, date
 from zoneinfo import ZoneInfo
 
@@ -25,6 +26,9 @@ from app.api.v1.services.appointment_service import (
     reschedule_appointment_any_with_slots_service,
     donor_has_active_appointment_service,
     get_active_appointment_by_dni_service,
+    count_appointments_by_request_service,
+    get_appointments_by_request_service,
+    get_appointment_for_donor_in_request_service,
 )
 from app.api.v1.services.available_slots_service import (
     release_slot_service,
@@ -45,6 +49,8 @@ from app.api.v1.services.stock_service import crear_unidad_service
 from app.api.v1.services.blood_bank_service import add_blood_units_by_group_service
 from app.schemas.stock_schema import UnidadCreate
 from app.utils.auth_utils import resolve_hospital_id
+
+logger = logging.getLogger(__name__)
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 MIN_TIME = time(7, 0)
@@ -113,6 +119,32 @@ def _validate_donor_can_book(donor_id: str):
 def get_appointments_controller(current_user: dict):
     hospital_id = resolve_hospital_id(current_user)
     return get_appointments_service(hospital_id)
+
+
+def get_appointments_by_request_controller(request_id: str, current_user: dict):
+    hospital_id = resolve_hospital_id(current_user)
+
+    if not request_id or not request_id.strip():
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    hospital_request = get_hospital_request_by_id_service(hospital_id, request_id)
+    if not hospital_request:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    return get_appointments_by_request_service(hospital_id, request_id)
+
+
+def count_appointments_by_request_controller(request_id: str, current_user: dict):
+    hospital_id = resolve_hospital_id(current_user)
+
+    if not request_id or not request_id.strip():
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    hospital_request = get_hospital_request_by_id_service(hospital_id, request_id)
+    if not hospital_request:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    return count_appointments_by_request_service(hospital_id, request_id)
 
 
 def get_appointment_by_id_controller(appointment_id: str, current_user: dict):
@@ -258,8 +290,9 @@ def _validate_status_transition(current_status: str, new_status: str):
         )
 
     allowed = {
-        "PROGRAMADO": {"CONFIRMADO", "CANCELADO", "NO_PRESENTADO"},
-        "CONFIRMADO": {"COMPLETADO", "CANCELADO", "NO_PRESENTADO"},
+        "PROGRAMADO": {"CONFIRMADO", "CANCELADO", "NO_PRESENTADO", "PENDIENTE_CLASIFICACION"},
+        "CONFIRMADO": {"COMPLETADO", "CANCELADO", "NO_PRESENTADO", "PENDIENTE_CLASIFICACION"},
+        "PENDIENTE_CLASIFICACION": {"COMPLETADO", "CANCELADO", "NO_PRESENTADO"},
     }
 
     if current_status not in allowed:
@@ -583,12 +616,69 @@ def confirmar_asistencia_controller(
             detail=f"No se puede marcar asistencia: el turno está en estado {current_status}",
         )
 
+    if current_status not in {"PROGRAMADO", "CONFIRMADO", "PENDIENTE_CLASIFICACION"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"No se puede clasificar un turno en estado {current_status}",
+        )
+
+    # Validación para pedidos de tipo EVENTO: el donante debe tener turno asignado
+    hospital_request_id = (existing.get("hospital_request_id") or "").strip()
+    if hospital_request_id:
+        hospital_request = get_hospital_request_any_service(hospital_request_id)
+        if hospital_request and (hospital_request.get("tipo") or "").lower() == "evento":
+            donor_id_in_appt = (existing.get("donor_id") or "").strip()
+            ts = datetime.now(BA_TZ).isoformat()
+
+            if not donor_id_in_appt:
+                logger.warning(
+                    "EVENTO_DONATION_BLOCKED no_donor_id appointment_id=%s hospital_request_id=%s ts=%s",
+                    appointment_id, hospital_request_id, ts,
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "DONOR_NOT_ASSIGNED_TO_EVENT",
+                        "message": "El donante no tiene un turno asignado para este evento",
+                    },
+                )
+
+            assigned = get_appointment_for_donor_in_request_service(hospital_request_id, donor_id_in_appt)
+            if not assigned:
+                logger.warning(
+                    "EVENTO_DONATION_BLOCKED donor_not_assigned donor_id=%s hospital_request_id=%s ts=%s",
+                    donor_id_in_appt, hospital_request_id, ts,
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "DONOR_NOT_ASSIGNED_TO_EVENT",
+                        "message": "El donante no tiene un turno asignado para este evento",
+                    },
+                )
+
+    # Resolver blood_group: del body o del perfil del donante
+    blood_group = body.blood_group
+    if not blood_group:
+        donante_id = existing.get("donor_id")
+        donor_data = get_donor_by_id_service(donante_id) if donante_id else None
+        if not donor_data:
+            donor_dni = (existing.get("donor") or {}).get("dni")
+            donor_data = get_donor_by_dni_service(donor_dni) if donor_dni else None
+        blood_group = (donor_data or {}).get("blood_group") if donor_data else None
+
+    if not blood_group:
+        raise HTTPException(
+            status_code=422,
+            detail="No se pudo determinar el grupo sanguíneo del donante",
+        )
+
     # Cambiar estado a COMPLETADO
     updated = update_appointment_status_service(hospital_id, appointment_id, "COMPLETADO")
     if not updated:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
-    add_blood_units_by_group_service(hospital_id, body.blood_group, 450)
+    add_blood_units_by_group_service(hospital_id, blood_group, 450)
 
     # Crear una unidad por cada componente seleccionado
     donante_id = existing.get("donor_id")  # presente en turnos Vito, None en manuales
@@ -599,7 +689,7 @@ def confirmar_asistencia_controller(
             componente,
             hospital_id,
             UnidadCreate(
-                blood_group=body.blood_group,
+                blood_group=blood_group,
                 turno_id=appointment_id,
                 donante_id=donante_id,
             ),

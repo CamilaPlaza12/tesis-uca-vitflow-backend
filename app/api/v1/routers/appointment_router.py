@@ -25,6 +25,8 @@ from app.api.v1.controllers.appointment_controller import (
     get_available_slots_for_request_controller,
     get_active_appointment_by_dni_controller,
     confirmar_asistencia_controller,
+    count_appointments_by_request_controller,
+    get_appointments_by_request_controller,
 )
 
 router = APIRouter(prefix="/appointments", tags=["Appointments"])
@@ -112,6 +114,22 @@ async def get_available_slots_for_request_endpoint(
         allow_existing_active=allow_existing_active,
         current_user=current_user,
     )
+
+
+@router.get("/request/{request_id}")
+async def get_appointments_by_request_endpoint(
+    request_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_appointments_by_request_controller(request_id, current_user)
+
+
+@router.get("/request/{request_id}/count")
+async def count_appointments_by_request_endpoint(
+    request_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return count_appointments_by_request_controller(request_id, current_user)
 
 
 @router.get("/{appointment_id}")

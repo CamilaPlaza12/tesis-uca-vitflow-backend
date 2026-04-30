@@ -4,7 +4,6 @@ from app.schemas.evento_schema import (
     EventoCreate,
     EventoUpdate,
     RegistrarDonacionRequest,
-    ClasificarRequest,
 )
 from app.api.v1.services.evento_service import (
     create_evento_service,
@@ -14,7 +13,6 @@ from app.api.v1.services.evento_service import (
     finalizar_evento_service,
     registrar_donacion_service,
     get_donaciones_evento_service,
-    clasificar_donacion_service,
     get_dashboard_service,
 )
 from app.utils.auth_utils import resolve_hospital_id
@@ -94,15 +92,6 @@ def get_donaciones_controller(evento_id: str, current_user: dict) -> list:
 def get_pendientes_clasificacion_controller(evento_id: str, current_user: dict) -> list:
     hospital_id = resolve_hospital_id(current_user)
     return get_donaciones_evento_service(hospital_id, evento_id, solo_pendientes=True)
-
-
-def clasificar_donacion_controller(
-    registro_id: str,
-    body: ClasificarRequest,
-    current_user: dict,
-) -> dict:
-    hospital_id = resolve_hospital_id(current_user)
-    return clasificar_donacion_service(registro_id, body.componente_donado, hospital_id)
 
 
 def get_dashboard_controller(evento_id: str, current_user: dict) -> dict:

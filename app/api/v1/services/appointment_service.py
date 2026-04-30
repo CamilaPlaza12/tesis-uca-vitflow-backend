@@ -7,7 +7,7 @@ from app.schemas.appointment_schema import AppointmentCreate, AppointmentCreateF
 from app.api.v1.services.available_slots_service import reserve_slot_service, release_slot_service
 
 HOSPITALS_COLLECTION = "hospitals"
-ACTIVE_APPOINTMENT_STATUSES = {"PROGRAMADO", "CONFIRMADO"}
+ACTIVE_APPOINTMENT_STATUSES = {"PROGRAMADO", "CONFIRMADO", "PENDIENTE_CLASIFICACION"}
 
 
 def _get_hospital_name(hospital_id: str | None) -> str | None:
@@ -334,6 +334,50 @@ def reschedule_appointment_any_with_slots_service(
     return data
 
 
+def get_appointments_by_request_service(hospital_id: str, hospital_request_id: str) -> list[dict]:
+    docs = (
+        db.collection("appointments")
+        .where("hospital_id", "==", hospital_id)
+        .where("hospital_request_id", "==", hospital_request_id)
+        .stream()
+    )
+
+    results = []
+    for snap in docs:
+        appt = snap.to_dict() or {}
+        donor = appt.get("donor") or {}
+        results.append({
+            "full_name": donor.get("full_name"),
+            "dni": donor.get("dni"),
+            "status": appt.get("status"),
+            "time_local": appt.get("time_local"),
+            "date_local": appt.get("date_local"),
+        })
+
+    results.sort(key=lambda x: (x.get("date_local") or "", x.get("time_local") or ""))
+    return results
+
+
+def count_appointments_by_request_service(hospital_id: str, hospital_request_id: str) -> dict:
+    docs = (
+        db.collection("appointments")
+        .where("hospital_id", "==", hospital_id)
+        .where("hospital_request_id", "==", hospital_request_id)
+        .stream()
+    )
+
+    total = 0
+    by_status: dict[str, int] = {}
+
+    for snap in docs:
+        appt = snap.to_dict() or {}
+        st = appt.get("status", "UNKNOWN")
+        by_status[st] = by_status.get(st, 0) + 1
+        total += 1
+
+    return {"total": total, "by_status": by_status}
+
+
 def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id: str) -> dict:
     docs = (
         db.collection("appointments")
@@ -371,6 +415,45 @@ def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id
                 donor_ids.append(donor_id)
 
     return {"cancelled_count": cancelled, "donor_ids": donor_ids}
+
+
+def find_appointment_for_event_arrival_service(hospital_request_id: str, donor_dni: str) -> dict | None:
+    """Return the first PROGRAMADO/CONFIRMADO appointment for a donor (by DNI) in a hospital_request."""
+    docs = (
+        db.collection("appointments")
+        .where("hospital_request_id", "==", hospital_request_id)
+        .where("donor.dni", "==", donor_dni)
+        .stream()
+    )
+    for doc in docs:
+        data = doc.to_dict() or {}
+        if data.get("status") in {"PROGRAMADO", "CONFIRMADO"}:
+            data["id"] = doc.id
+            return data
+    return None
+
+
+def get_appointment_for_donor_in_request_service(hospital_request_id: str, donor_id: str) -> dict | None:
+    """Return the first active appointment for a donor in a specific hospital_request, or None."""
+    donor_id = (donor_id or "").strip()
+    hospital_request_id = (hospital_request_id or "").strip()
+    if not donor_id or not hospital_request_id:
+        return None
+
+    docs = (
+        db.collection("appointments")
+        .where("hospital_request_id", "==", hospital_request_id)
+        .where("donor_id", "==", donor_id)
+        .stream()
+    )
+
+    for doc in docs:
+        data = doc.to_dict() or {}
+        if data.get("status") in ACTIVE_APPOINTMENT_STATUSES:
+            data["id"] = doc.id
+            return data
+
+    return None
 
 
 def search_appointments_by_range_service(hospital_id: str, desde: date, hasta: date):

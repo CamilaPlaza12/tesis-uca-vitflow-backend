@@ -14,7 +14,6 @@ from app.api.v1.routers import auth_router, appointment_router, availability_rou
 from app.api.v1.routers import stock_router
 from app.api.v1.routers import donacion_router
 from app.api.v1.routers import evento_router
-from app.api.v1.routers import registro_donacion_router
 from app.firebase import firebase_client
 
 app = FastAPI(title=PROJECT_NAME)
@@ -49,7 +48,6 @@ app.include_router(home_router.router, prefix=API_V1_PREFIX)
 app.include_router(stock_router.router, prefix=API_V1_PREFIX)
 app.include_router(donacion_router.router, prefix=API_V1_PREFIX)
 app.include_router(evento_router.router, prefix=API_V1_PREFIX)
-app.include_router(registro_donacion_router.router, prefix=API_V1_PREFIX)
 
 
 

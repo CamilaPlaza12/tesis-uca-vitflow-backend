@@ -15,6 +15,7 @@ from app.api.v1.controllers.evento_controller import (
     get_pendientes_clasificacion_controller,
     get_dashboard_controller,
 )
+# Clasificación de donaciones: usar POST /appointments/{appointment_id}/confirmar-asistencia
 from app.api.v1.services.vito_notification_service import notify_vito_for_new_request
 
 logger = logging.getLogger("vitflow.eventos")

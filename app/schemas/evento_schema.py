@@ -54,30 +54,19 @@ class RegistrarDonacionRequest(BaseModel):
 
 
 class RegistroDonacionOut(BaseModel):
-    registro_id: str
+    turno_id: str
     donante_dni: str
     donante_nombre: Optional[str] = None
-    timestamp_donacion: str
-    componente_donado: Optional[ComponenteDonado] = None
+    status: str
+    date_local: Optional[str] = None
+    time_local: Optional[str] = None
 
 
 class RegistrarDonacionResponse(BaseModel):
-    registro_id: str
+    turno_id: str
     donante_dni: str
     donante_nombre: Optional[str] = None
-    timestamp_donacion: str
-    mensaje: str
-
-
-class ClasificarRequest(BaseModel):
-    componente_donado: ComponenteDonado
-
-
-class ClasificarResponse(BaseModel):
-    registro_id: str
-    donante_dni: str
-    donante_nombre: Optional[str] = None
-    componente_donado: ComponenteDonado
+    status: str
     mensaje: str
 
 

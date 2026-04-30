@@ -15,7 +15,10 @@ from app.api.v1.services.hospital_request_service import (
     get_available_blood_groups_service,
 )
 from app.api.v1.services.appointment_service import cancel_appointments_by_request_service
-from app.api.v1.services.evento_service import sync_evento_cancelado_by_pedido_id
+from app.api.v1.services.evento_service import (
+    sync_evento_cancelado_by_pedido_id,
+    sync_evento_finalizado_by_pedido_id,
+)
 from app.utils.auth_utils import resolve_hospital_id
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
@@ -121,6 +124,7 @@ def update_hospital_request_controller(
             raise HTTPException(status_code=400, detail="end_date must be in the future")
 
     is_cancelling = patch.get("status") == "CANCELADO" and existing_status != "CANCELADO"
+    is_finalizing = patch.get("status") == "FINALIZADO" and existing_status != "FINALIZADO"
 
     if "comments" in patch:
         c = (patch["comments"] or "").strip()
@@ -133,6 +137,9 @@ def update_hospital_request_controller(
 
     if is_cancelling:
         cancel_appointments_by_request_service(hospital_id, request_id)
+
+    if is_finalizing and existing.get("request_type") == "EVENTO":
+        sync_evento_finalizado_by_pedido_id(request_id)
 
     return updated_req
 

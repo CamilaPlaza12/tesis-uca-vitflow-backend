@@ -3,7 +3,14 @@ from typing import List, Literal, Optional
 from datetime import date
 
 DonationType = Literal["SANGRE", "PLAQUETAS", "MEDULA_OSEA"]
-AppointmentStatus = Literal["PROGRAMADO", "CONFIRMADO", "CANCELADO", "COMPLETADO", "NO_PRESENTADO"]
+AppointmentStatus = Literal[
+    "PROGRAMADO",
+    "CONFIRMADO",
+    "PENDIENTE_CLASIFICACION",
+    "COMPLETADO",
+    "CANCELADO",
+    "NO_PRESENTADO",
+]
 AppointmentSource = Literal["HOSPITAL_MANUAL", "VITO_WHATSAPP"]
 
 
@@ -58,8 +65,9 @@ class ConfirmarAsistenciaRequest(BaseModel):
     """
     Body para marcar la asistencia de un donante y registrar los componentes obtenidos.
     Cambia el turno a COMPLETADO y crea una unidad por cada componente seleccionado.
+    Si blood_group es None, se resuelve automáticamente desde el perfil del donante.
     """
-    blood_group: BloodGroup
+    blood_group: Optional[BloodGroup] = None
     componentes: List[Componente] = Field(..., min_length=1)
 
 

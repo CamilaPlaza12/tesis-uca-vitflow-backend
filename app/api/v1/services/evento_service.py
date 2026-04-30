@@ -1,20 +1,17 @@
 """
 Servicio para Eventos de donación.
 
-Colecciones Firestore:
-  - eventos                  : documentos de cada evento
-  - registros_donacion_evento: registros de donación individuales por evento
-  - hospital_requests        : al crear un evento se genera un pedido tipo "EVENTO"
-  - donors                   : se consulta por DNI para autocompletar el nombre del donante
+Colecciones Firestore usadas:
+  - eventos          : documentos de cada evento
+  - hospital_requests: al crear un evento se genera un pedido tipo "EVENTO"
+  - appointments     : los turnos son la fuente de verdad del estado de cada donante
+  - donors           : para obtener el nombre del donante
 
-Qué se encontró al analizar el modelo de Pedido existente:
-  - El campo `request_type` ya existe ("NORMAL" | "CAMPAÑA"). Se almacena "EVENTO" como
-    valor nuevo directamente en Firestore sin modificar el schema Pydantic existente.
-  - El campo `blood_group` es un str único. Los pedidos EVENTO agregan campos extra
-    `blood_groups: list[str]` y `factores_rh: list[str]` en el documento Firestore,
-    sin tocar ningún schema, router ni endpoint existente.
+Flujo de estados de turno en un evento:
+  PROGRAMADO / CONFIRMADO → PENDIENTE_CLASIFICACION → COMPLETADO
 """
 
+import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -23,12 +20,19 @@ from fastapi import HTTPException
 from app.firebase.firebase_client import db
 from app.schemas.evento_schema import EventoCreate, EventoUpdate
 
+logger = logging.getLogger(__name__)
+
 COLLECTION_EVENTOS = "eventos"
-COLLECTION_REGISTROS = "registros_donacion_evento"
 COLLECTION_PEDIDOS = "hospital_requests"
 COLLECTION_DONORS = "donors"
+COLLECTIONS_COMPONENTES = ("globulos_rojos", "plasma", "plaquetas")
 
 BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
+
+# Estados que indican que el donante ya llegó al evento (llegada registrada o completado)
+ARRIVED_STATUSES = {"PENDIENTE_CLASIFICACION", "COMPLETADO"}
+# Estados válidos para registrar llegada (el turno aún no fue procesado)
+ARRIVAL_ELIGIBLE_STATUSES = {"PROGRAMADO", "CONFIRMADO"}
 
 
 def _now_ba_iso() -> str:
@@ -51,6 +55,25 @@ def _lookup_donante_nombre(dni: str) -> str | None:
     return None
 
 
+def _find_appointment_for_arrival(pedido_id: str, donor_dni: str) -> dict | None:
+    """
+    Devuelve el turno en estado PROGRAMADO o CONFIRMADO para ese DNI en ese pedido.
+    Usa el campo anidado donor.dni que Firestore soporta con dot-notation.
+    """
+    docs = (
+        db.collection("appointments")
+        .where("hospital_request_id", "==", pedido_id)
+        .where("donor.dni", "==", donor_dni)
+        .stream()
+    )
+    for doc in docs:
+        data = doc.to_dict() or {}
+        if data.get("status") in ARRIVAL_ELIGIBLE_STATUSES:
+            data["id"] = doc.id
+            return data
+    return None
+
+
 def sync_evento_cancelado_by_pedido_id(pedido_id: str) -> bool:
     """Set estado=CANCELADO on the evento linked to pedido_id. Returns True if found."""
     docs = (
@@ -68,6 +91,26 @@ def sync_evento_cancelado_by_pedido_id(pedido_id: str) -> bool:
     return False
 
 
+def sync_evento_finalizado_by_pedido_id(pedido_id: str) -> bool:
+    """Set estado=FINALIZADO on the evento linked to pedido_id. Returns True if found."""
+    docs = (
+        db.collection(COLLECTION_EVENTOS)
+        .where("pedido_id", "==", pedido_id)
+        .limit(1)
+        .stream()
+    )
+    for doc in docs:
+        data = doc.to_dict() or {}
+        if data.get("estado") in {"CANCELADO", "FINALIZADO"}:
+            return True
+        db.collection(COLLECTION_EVENTOS).document(doc.id).update({
+            "estado": "FINALIZADO",
+            "updated_at": _now_ba_iso(),
+        })
+        return True
+    return False
+
+
 def create_evento_service(hospital_id: str, body: EventoCreate) -> dict:
     now_iso = _now_ba_iso()
 
@@ -75,9 +118,6 @@ def create_evento_service(hospital_id: str, body: EventoCreate) -> dict:
     hora_inicio_str = body.hora_inicio.strftime("%H:%M") if body.hora_inicio else None
     hora_fin_str = body.hora_fin.strftime("%H:%M") if body.hora_fin else None
 
-    # Crear el hospital_request asociado al evento.
-    # Campos extra blood_groups y factores_rh conviven con la estructura normal;
-    # blood_group se fija en "MULTIPLE" para identificar pedidos multi-grupo.
     pedido_data = {
         "hospital_id": hospital_id,
         "datetime_local": now_iso,
@@ -128,14 +168,19 @@ def get_eventos_service(hospital_id: str) -> list:
     for doc in docs:
         data = doc.to_dict() or {}
         evento_id = doc.id
+        pedido_id = (data.get("pedido_id") or "").strip()
 
-        total_donaciones = sum(
-            1 for _ in (
-                db.collection(COLLECTION_REGISTROS)
-                .where("evento_id", "==", evento_id)
-                .stream()
+        total_donaciones = 0
+        if pedido_id:
+            total_donaciones = sum(
+                1 for snap in (
+                    db.collection("appointments")
+                    .where("hospital_request_id", "==", pedido_id)
+                    .where("hospital_id", "==", hospital_id)
+                    .stream()
+                )
+                if (snap.to_dict() or {}).get("status") in ARRIVED_STATUSES
             )
-        )
 
         results.append({
             "id": evento_id,
@@ -229,6 +274,10 @@ def finalizar_evento_service(hospital_id: str, evento_id: str) -> dict:
 
 
 def registrar_donacion_service(hospital_id: str, evento_id: str, dni: str) -> dict:
+    """
+    Registra la llegada del donante al evento: busca su turno activo y lo pasa a
+    PENDIENTE_CLASIFICACION. No crea registros adicionales.
+    """
     snap = db.collection(COLLECTION_EVENTOS).document(evento_id).get()
     if not snap.exists:
         raise HTTPException(status_code=404, detail="Evento no encontrado")
@@ -243,36 +292,44 @@ def registrar_donacion_service(hospital_id: str, evento_id: str, dni: str) -> di
             detail="Solo se pueden registrar donaciones en eventos ACTIVOS",
         )
 
-    existing = list(
-        db.collection(COLLECTION_REGISTROS)
-        .where("evento_id", "==", evento_id)
-        .where("donante_dni", "==", dni)
-        .limit(1)
-        .stream()
+    pedido_id = (data.get("pedido_id") or "").strip()
+    if not pedido_id:
+        raise HTTPException(status_code=409, detail="Evento sin pedido asociado")
+
+    appointment = _find_appointment_for_arrival(pedido_id, dni)
+    if not appointment:
+        ts = _now_ba_iso()
+        logger.warning(
+            "EVENTO_ARRIVAL_BLOCKED no_active_appointment dni=%s pedido_id=%s evento_id=%s ts=%s",
+            dni, pedido_id, evento_id, ts,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "DONOR_NOT_ASSIGNED_TO_EVENT",
+                "message": "El donante no tiene un turno activo asignado para este evento",
+            },
+        )
+
+    appointment_id = appointment["id"]
+    donor = appointment.get("donor") or {}
+    donante_nombre = donor.get("full_name") or _lookup_donante_nombre(dni)
+
+    db.collection("appointments").document(appointment_id).update({
+        "status": "PENDIENTE_CLASIFICACION",
+    })
+
+    logger.info(
+        "EVENTO_ARRIVAL_REGISTERED turno_id=%s dni=%s evento_id=%s",
+        appointment_id, dni, evento_id,
     )
-    if existing:
-        raise HTTPException(status_code=400, detail="Este DNI ya fue registrado en este evento")
-
-    donante_nombre = _lookup_donante_nombre(dni)
-
-    now_iso = _now_ba_iso()
-    registro_data = {
-        "evento_id": evento_id,
-        "donante_dni": dni,
-        "donante_nombre": donante_nombre,
-        "timestamp_donacion": now_iso,
-        "componente_donado": None,
-    }
-
-    res = db.collection(COLLECTION_REGISTROS).add(registro_data)
-    reg_ref = res[1] if isinstance(res, (list, tuple)) and len(res) == 2 else res
 
     return {
-        "registro_id": reg_ref.id,
-        "donante_dni": dni,
+        "turno_id": appointment_id,
+        "donante_dni": donor.get("dni", dni),
         "donante_nombre": donante_nombre,
-        "timestamp_donacion": now_iso,
-        "mensaje": "Donación registrada correctamente",
+        "status": "PENDIENTE_CLASIFICACION",
+        "mensaje": "Donante registrado como llegado. Pendiente clasificación.",
     }
 
 
@@ -288,62 +345,40 @@ def get_donaciones_evento_service(
     if data.get("hospital_id") != hospital_id:
         raise HTTPException(status_code=404, detail="Evento no encontrado")
 
+    pedido_id = (data.get("pedido_id") or "").strip()
+    if not pedido_id:
+        return []
+
     docs = (
-        db.collection(COLLECTION_REGISTROS)
-        .where("evento_id", "==", evento_id)
+        db.collection("appointments")
+        .where("hospital_request_id", "==", pedido_id)
+        .where("hospital_id", "==", hospital_id)
         .stream()
     )
 
     results = []
     for doc in docs:
-        reg = doc.to_dict() or {}
-        componente = reg.get("componente_donado")
+        appt = doc.to_dict() or {}
+        status = appt.get("status", "")
 
-        if solo_pendientes and componente is not None:
+        if status not in ARRIVED_STATUSES:
             continue
 
+        if solo_pendientes and status != "PENDIENTE_CLASIFICACION":
+            continue
+
+        donor = appt.get("donor") or {}
         results.append({
-            "registro_id": doc.id,
-            "donante_dni": reg.get("donante_dni", ""),
-            "donante_nombre": reg.get("donante_nombre"),
-            "timestamp_donacion": reg.get("timestamp_donacion", ""),
-            "componente_donado": componente,
+            "turno_id": doc.id,
+            "donante_dni": donor.get("dni", ""),
+            "donante_nombre": donor.get("full_name"),
+            "status": status,
+            "date_local": appt.get("date_local"),
+            "time_local": appt.get("time_local"),
         })
 
-    results.sort(key=lambda x: x.get("timestamp_donacion", ""))
+    results.sort(key=lambda x: (x.get("date_local") or "", x.get("time_local") or ""))
     return results
-
-
-def clasificar_donacion_service(
-    registro_id: str,
-    componente_donado: str,
-    hospital_id: str,
-) -> dict:
-    snap = db.collection(COLLECTION_REGISTROS).document(registro_id).get()
-    if not snap.exists:
-        raise HTTPException(status_code=404, detail="Registro de donación no encontrado")
-
-    reg_data = snap.to_dict() or {}
-
-    # Verificar que el evento asociado pertenece al hospital autenticado
-    evento_id = reg_data.get("evento_id", "")
-    evento_snap = db.collection(COLLECTION_EVENTOS).document(evento_id).get()
-    if not evento_snap.exists:
-        raise HTTPException(status_code=404, detail="Evento no encontrado")
-    if (evento_snap.to_dict() or {}).get("hospital_id") != hospital_id:
-        raise HTTPException(status_code=404, detail="Registro de donación no encontrado")
-
-    db.collection(COLLECTION_REGISTROS).document(registro_id).update({
-        "componente_donado": componente_donado,
-    })
-
-    return {
-        "registro_id": registro_id,
-        "donante_dni": reg_data.get("donante_dni", ""),
-        "donante_nombre": reg_data.get("donante_nombre"),
-        "componente_donado": componente_donado,
-        "mensaje": "Clasificación guardada correctamente",
-    }
 
 
 def get_dashboard_service(hospital_id: str, evento_id: str) -> dict:
@@ -355,33 +390,39 @@ def get_dashboard_service(hospital_id: str, evento_id: str) -> dict:
     if data.get("hospital_id") != hospital_id:
         raise HTTPException(status_code=404, detail="Evento no encontrado")
 
-    registros = [
-        (doc.to_dict() or {})
-        for doc in db.collection(COLLECTION_REGISTROS).where("evento_id", "==", evento_id).stream()
-    ]
+    pedido_id = (data.get("pedido_id") or "").strip()
 
-    total = len(registros)
-    pendientes = sum(1 for r in registros if r.get("componente_donado") is None)
+    total = 0
+    pendientes = 0
+    completados_ids: list[str] = []
 
-    por_componente = {
-        "plasma": 0,
-        "plaquetas": 0,
-        "globulos_rojos": 0,
-        "sangre_entera": 0,
-        "sin_clasificar": 0,
-    }
-    for r in registros:
-        comp = r.get("componente_donado")
-        if comp == "PLASMA":
-            por_componente["plasma"] += 1
-        elif comp == "PLAQUETAS":
-            por_componente["plaquetas"] += 1
-        elif comp == "GLOBULOS_ROJOS":
-            por_componente["globulos_rojos"] += 1
-        elif comp == "SANGRE_ENTERA":
-            por_componente["sangre_entera"] += 1
-        else:
-            por_componente["sin_clasificar"] += 1
+    if pedido_id:
+        for doc in (
+            db.collection("appointments")
+            .where("hospital_request_id", "==", pedido_id)
+            .where("hospital_id", "==", hospital_id)
+            .stream()
+        ):
+            status = (doc.to_dict() or {}).get("status", "")
+            if status == "PENDIENTE_CLASIFICACION":
+                total += 1
+                pendientes += 1
+            elif status == "COMPLETADO":
+                total += 1
+                completados_ids.append(doc.id)
+
+    # Conteo de unidades creadas por componente para turnos COMPLETADOS del evento
+    por_componente: dict[str, int] = {c: 0 for c in COLLECTIONS_COMPONENTES}
+    for appt_id in completados_ids:
+        for comp in COLLECTIONS_COMPONENTES:
+            count = sum(
+                1 for _ in (
+                    db.collection(comp)
+                    .where("turno_id", "==", appt_id)
+                    .stream()
+                )
+            )
+            por_componente[comp] += count
 
     capacidad = data.get("capacidad_esperada")
     porcentaje = round((total / capacidad) * 100, 2) if capacidad and capacidad > 0 else 0.0
