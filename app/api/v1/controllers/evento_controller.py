@@ -9,6 +9,7 @@ from app.api.v1.services.evento_service import (
     create_evento_service,
     get_eventos_service,
     get_evento_activo_service,
+    get_evento_by_id_service,
     update_evento_service,
     finalizar_evento_service,
     registrar_donacion_service,
@@ -45,6 +46,14 @@ def get_evento_activo_controller(current_user: dict) -> dict:
     evento = get_evento_activo_service(hospital_id)
     if not evento:
         raise HTTPException(status_code=404, detail="No hay ningún evento activo")
+    return evento
+
+
+def get_evento_by_id_controller(evento_id: str, current_user: dict) -> dict:
+    hospital_id = resolve_hospital_id(current_user)
+    evento = get_evento_by_id_service(hospital_id, evento_id)
+    if not evento:
+        raise HTTPException(status_code=404, detail="Evento no encontrado")
     return evento
 
 

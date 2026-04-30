@@ -8,6 +8,7 @@ from app.api.v1.controllers.evento_controller import (
     create_evento_controller,
     get_eventos_controller,
     get_evento_activo_controller,
+    get_evento_by_id_controller,
     update_evento_controller,
     finalizar_evento_controller,
     registrar_donacion_controller,
@@ -66,6 +67,14 @@ def get_eventos_endpoint(
     current_user: dict = Depends(get_current_user),
 ):
     return get_eventos_controller(current_user)
+
+
+@router.get("/{evento_id}")
+def get_evento_endpoint(
+    evento_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_evento_by_id_controller(evento_id, current_user)
 
 
 @router.patch("/{evento_id}/finalizar")
