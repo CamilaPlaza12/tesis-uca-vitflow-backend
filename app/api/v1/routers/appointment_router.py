@@ -6,8 +6,9 @@ from app.core.security import get_current_user
 from app.schemas.appointment_schema import (
     AppointmentCreate,
     AppointmentCreateFromVito,
-    ConfirmarAsistenciaRequest,
     ConfirmarAsistenciaOut,
+    ClassifyComponentsRequest,
+    ClassifyComponentsOut,
     UpdateAppointmentStatusRequest,
     RescheduleAppointmentRequest,
 )
@@ -25,6 +26,7 @@ from app.api.v1.controllers.appointment_controller import (
     get_available_slots_for_request_controller,
     get_active_appointment_by_dni_controller,
     confirmar_asistencia_controller,
+    classify_components_controller,
     count_appointments_by_request_controller,
     get_appointments_by_request_controller,
 )
@@ -177,12 +179,26 @@ async def reschedule_appointment_endpoint(
 @router.post("/{appointment_id}/confirmar-asistencia", response_model=ConfirmarAsistenciaOut, status_code=200)
 async def confirmar_asistencia_endpoint(
     appointment_id: str,
-    body: ConfirmarAsistenciaRequest,
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Marcar asistencia del donante: cambia el turno a COMPLETADO y registra
-    los componentes obtenidos creando una unidad por cada uno en stock.
-    Acepta el turno en estado PROGRAMADO o CONFIRMADO.
+    Paso 1: Confirmar llegada del donante.
+    Cambia el turno de PROGRAMADO/CONFIRMADO a PENDIENTE_CLASIFICACION
+    y actualiza la fecha de última donación en el perfil del donante.
     """
-    return confirmar_asistencia_controller(appointment_id, body, current_user)
+    return confirmar_asistencia_controller(appointment_id, current_user)
+
+
+@router.post("/{appointment_id}/classify-components", response_model=ClassifyComponentsOut, status_code=200)
+async def classify_components_endpoint(
+    appointment_id: str,
+    body: ClassifyComponentsRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Paso 2: Clasificar los componentes obtenidos de la donación.
+    Solo acepta turnos en PENDIENTE_CLASIFICACION.
+    Crea unidades de stock y cambia el estado a COMPLETADO.
+    El grupo sanguíneo se obtiene automáticamente desde el perfil del donante.
+    """
+    return classify_components_controller(appointment_id, body, current_user)

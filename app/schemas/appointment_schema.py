@@ -61,13 +61,16 @@ Componente = Literal["globulos_rojos", "plasma", "plaquetas"]
 BloodGroup = Literal["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 
 
-class ConfirmarAsistenciaRequest(BaseModel):
-    """
-    Body para marcar la asistencia de un donante y registrar los componentes obtenidos.
-    Cambia el turno a COMPLETADO y crea una unidad por cada componente seleccionado.
-    Si blood_group es None, se resuelve automáticamente desde el perfil del donante.
-    """
-    blood_group: Optional[BloodGroup] = None
+# Step 1: confirmar asistencia → PENDIENTE_CLASIFICACION (no body required)
+
+class ConfirmarAsistenciaOut(BaseModel):
+    appointment_id: str
+    status: str  # PENDIENTE_CLASIFICACION
+
+
+# Step 2: clasificar componentes → COMPLETADO
+
+class ClassifyComponentsRequest(BaseModel):
     componentes: List[Componente] = Field(..., min_length=1)
 
 
@@ -79,7 +82,17 @@ class UnidadResumen(BaseModel):
     estado: str
 
 
-class ConfirmarAsistenciaOut(BaseModel):
+class ClassifyComponentsOut(BaseModel):
     appointment_id: str
-    status: str
+    status: str  # COMPLETADO
     unidades_creadas: List[UnidadResumen]
+
+
+# For GET /hospital-requests/{id}/pending-classifications
+
+class PendingClassificationItem(BaseModel):
+    appointment_id: str
+    donor_dni: str
+    donor_name: str
+    donor_blood_type: Optional[str]
+    date_local: str

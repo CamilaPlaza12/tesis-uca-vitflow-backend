@@ -14,7 +14,10 @@ from app.api.v1.services.hospital_request_service import (
     find_active_manual_request_service,
     get_available_blood_groups_service,
 )
-from app.api.v1.services.appointment_service import cancel_appointments_by_request_service
+from app.api.v1.services.appointment_service import (
+    cancel_appointments_by_request_service,
+    get_pending_classifications_by_request_service,
+)
 from app.api.v1.services.evento_service import (
     sync_evento_cancelado_by_pedido_id,
     sync_evento_finalizado_by_pedido_id,
@@ -214,3 +217,21 @@ def get_available_blood_groups_controller(componente: str, current_user: dict) -
             detail="Invalid component (use SANGRE / PLAQUETAS / MEDULA_OSEA)",
         )
     return get_available_blood_groups_service(hospital_id, component)
+
+
+def get_pending_classifications_by_request_controller(request_id: str, current_user: dict) -> dict:
+    hospital_id = resolve_hospital_id(current_user)
+
+    if not request_id or not request_id.strip():
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    hospital_request = get_hospital_request_by_id_service(hospital_id, request_id)
+    if not hospital_request:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    items = get_pending_classifications_by_request_service(hospital_id, request_id)
+    return {
+        "request_id": request_id,
+        "total": len(items),
+        "items": items,
+    }

@@ -125,6 +125,8 @@ def get_active_appointment_by_dni_service(dni: str):
 
 
 def create_appointment_manual_service(hospital_id: str, appointment: AppointmentCreate):
+    from app.api.v1.services.donor_service import get_donor_by_dni_service
+
     data = appointment.model_dump()
 
     slot_key = reserve_slot_service(hospital_id, appointment.date_local, appointment.time_local)
@@ -136,6 +138,10 @@ def create_appointment_manual_service(hospital_id: str, appointment: Appointment
 
     if data.get("date_local") is not None:
         data["date_local"] = data["date_local"].isoformat()
+
+    donor_record = get_donor_by_dni_service(appointment.donor.dni)
+    if donor_record:
+        data["donor"]["blood_group"] = donor_record.get("blood_group")
 
     res = db.collection("appointments").add(data)
     doc_ref = res[1] if isinstance(res, (list, tuple)) and len(res) == 2 else res
@@ -163,6 +169,7 @@ def create_appointment_from_vito_service(
         "donor": {
             "full_name": full_name,
             "dni": donor.get("dni"),
+            "blood_group": donor.get("blood_group"),
         },
         "donation_type": donation_type,
         "hospital_id": hospital_id,
@@ -393,18 +400,19 @@ def cancel_appointments_by_request_service(hospital_id: str, hospital_request_id
         appt = snap.to_dict() or {}
         appt_status = appt.get("status")
 
-        if appt_status not in {"PROGRAMADO", "CONFIRMADO"}:
+        if appt_status not in {"PROGRAMADO", "CONFIRMADO", "PENDIENTE_CLASIFICACION"}:
             continue
 
-        date_str = appt.get("date_local")
-        time_str = appt.get("time_local")
-
-        if date_str and time_str:
-            try:
-                old_date = datetime.fromisoformat(date_str).date()
-                release_slot_service(hospital_id, old_date, time_str)
-            except Exception:
-                raise HTTPException(status_code=409, detail="Failed to release slot for an appointment")
+        # Only release the slot for appointments where the donor hasn't arrived yet
+        if appt_status in {"PROGRAMADO", "CONFIRMADO"}:
+            date_str = appt.get("date_local")
+            time_str = appt.get("time_local")
+            if date_str and time_str:
+                try:
+                    old_date = datetime.fromisoformat(date_str).date()
+                    release_slot_service(hospital_id, old_date, time_str)
+                except Exception:
+                    raise HTTPException(status_code=409, detail="Failed to release slot for an appointment")
 
         snap.reference.update({"status": "CANCELADO"})
         cancelled += 1
@@ -454,6 +462,31 @@ def get_appointment_for_donor_in_request_service(hospital_request_id: str, donor
             return data
 
     return None
+
+
+def get_pending_classifications_by_request_service(hospital_id: str, hospital_request_id: str) -> list[dict]:
+    docs = (
+        db.collection("appointments")
+        .where("hospital_id", "==", hospital_id)
+        .where("hospital_request_id", "==", hospital_request_id)
+        .where("status", "==", "PENDIENTE_CLASIFICACION")
+        .stream()
+    )
+
+    results = []
+    for snap in docs:
+        appt = snap.to_dict() or {}
+        donor_embed = appt.get("donor") or {}
+        results.append({
+            "appointment_id": snap.id,
+            "donor_dni": donor_embed.get("dni", ""),
+            "donor_name": donor_embed.get("full_name", ""),
+            "donor_blood_type": donor_embed.get("blood_group"),
+            "date_local": appt.get("date_local", ""),
+        })
+
+    results.sort(key=lambda x: (x.get("date_local") or "", x.get("appointment_id") or ""))
+    return results
 
 
 def search_appointments_by_range_service(hospital_id: str, desde: date, hasta: date):

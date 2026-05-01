@@ -7,8 +7,9 @@ from fastapi import HTTPException, status
 from app.schemas.appointment_schema import (
     AppointmentCreate,
     AppointmentCreateFromVito,
-    ConfirmarAsistenciaRequest,
     ConfirmarAsistenciaOut,
+    ClassifyComponentsRequest,
+    ClassifyComponentsOut,
     UnidadResumen,
     RescheduleAppointmentRequest,
     UpdateAppointmentStatusRequest,
@@ -29,6 +30,7 @@ from app.api.v1.services.appointment_service import (
     count_appointments_by_request_service,
     get_appointments_by_request_service,
     get_appointment_for_donor_in_request_service,
+    get_pending_classifications_by_request_service,
 )
 from app.api.v1.services.available_slots_service import (
     release_slot_service,
@@ -43,6 +45,7 @@ from app.api.v1.services.hospital_request_service import (
 from app.api.v1.services.donor_service import (
     get_donor_by_id_service,
     get_donor_by_dni_service,
+    update_donor_last_donation_date_service,
 )
 from app.api.v1.services.donor_eligibility_service import evaluate_donor_eligibility_service
 from app.api.v1.services.stock_service import crear_unidad_service
@@ -291,7 +294,7 @@ def _validate_status_transition(current_status: str, new_status: str):
 
     allowed = {
         "PROGRAMADO": {"CONFIRMADO", "CANCELADO", "NO_PRESENTADO", "PENDIENTE_CLASIFICACION"},
-        "CONFIRMADO": {"COMPLETADO", "CANCELADO", "NO_PRESENTADO", "PENDIENTE_CLASIFICACION"},
+        "CONFIRMADO": {"CANCELADO", "NO_PRESENTADO", "PENDIENTE_CLASIFICACION"},
         "PENDIENTE_CLASIFICACION": {"COMPLETADO", "CANCELADO", "NO_PRESENTADO"},
     }
 
@@ -588,16 +591,25 @@ def get_available_slots_for_request_controller(
     )
 
 
+def _resolve_donor_for_appointment(existing: dict) -> tuple[dict | None, str | None]:
+    """Returns (donor_data, donor_id). donor_data may be None if donor not registered."""
+    donor_id = existing.get("donor_id")
+    donor_data = get_donor_by_id_service(donor_id) if donor_id else None
+    if not donor_data:
+        donor_dni = (existing.get("donor") or {}).get("dni")
+        donor_data = get_donor_by_dni_service(donor_dni) if donor_dni else None
+    return donor_data, donor_id
+
+
 def confirmar_asistencia_controller(
     appointment_id: str,
-    body: ConfirmarAsistenciaRequest,
     current_user: dict,
 ) -> ConfirmarAsistenciaOut:
     """
-    Acción unificada de "Marcar asistencia":
-    1. Cambia el turno a COMPLETADO (desde PROGRAMADO o CONFIRMADO).
-    2. Suma 450 unidades al stock del grupo sanguíneo.
-    3. Crea una unidad de componente por cada ítem en body.componentes.
+    Paso 1 del flujo de donación: confirmar llegada del donante.
+    - Acepta turnos en PROGRAMADO o CONFIRMADO.
+    - Cambia el estado a PENDIENTE_CLASIFICACION.
+    - Actualiza donor.last_donation_date con la fecha del turno.
     """
     _require_auth(current_user)
     hospital_id = resolve_hospital_id(current_user)
@@ -610,16 +622,17 @@ def confirmar_asistencia_controller(
         raise HTTPException(status_code=404, detail="Appointment not found")
 
     current_status = existing.get("status")
+
     if current_status in {"CANCELADO", "COMPLETADO", "NO_PRESENTADO"}:
         raise HTTPException(
             status_code=409,
-            detail=f"No se puede marcar asistencia: el turno está en estado {current_status}",
+            detail=f"No se puede confirmar asistencia: el turno está en estado {current_status}",
         )
 
-    if current_status not in {"PROGRAMADO", "CONFIRMADO", "PENDIENTE_CLASIFICACION"}:
+    if current_status not in {"PROGRAMADO", "CONFIRMADO"}:
         raise HTTPException(
             status_code=409,
-            detail=f"No se puede clasificar un turno en estado {current_status}",
+            detail=f"No se puede confirmar asistencia desde el estado {current_status}",
         )
 
     # Validación para pedidos de tipo EVENTO: el donante debe tener turno asignado
@@ -657,15 +670,57 @@ def confirmar_asistencia_controller(
                     },
                 )
 
-    # Resolver blood_group: del body o del perfil del donante
-    blood_group = body.blood_group
-    if not blood_group:
-        donante_id = existing.get("donor_id")
-        donor_data = get_donor_by_id_service(donante_id) if donante_id else None
-        if not donor_data:
-            donor_dni = (existing.get("donor") or {}).get("dni")
-            donor_data = get_donor_by_dni_service(donor_dni) if donor_dni else None
-        blood_group = (donor_data or {}).get("blood_group") if donor_data else None
+    # Cambiar estado a PENDIENTE_CLASIFICACION
+    updated = update_appointment_status_service(hospital_id, appointment_id, "PENDIENTE_CLASIFICACION")
+    if not updated:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    # Actualizar last_donation_date del donante con la fecha del turno
+    donor_data, donor_id = _resolve_donor_for_appointment(existing)
+    if donor_id and donor_data:
+        date_str = existing.get("date_local", "")
+        if date_str:
+            update_donor_last_donation_date_service(donor_id, date_str)
+
+    return ConfirmarAsistenciaOut(
+        appointment_id=appointment_id,
+        status="PENDIENTE_CLASIFICACION",
+    )
+
+
+def classify_components_controller(
+    appointment_id: str,
+    body: ClassifyComponentsRequest,
+    current_user: dict,
+) -> ClassifyComponentsOut:
+    """
+    Paso 2 del flujo de donación: clasificar componentes obtenidos.
+    - Solo acepta turnos en PENDIENTE_CLASIFICACION.
+    - Resuelve el grupo sanguíneo automáticamente desde el perfil del donante.
+    - Crea una unidad de stock por cada componente.
+    - Suma 450 unidades al banco de sangre por grupo sanguíneo.
+    - Cambia el estado a COMPLETADO.
+    """
+    _require_auth(current_user)
+    hospital_id = resolve_hospital_id(current_user)
+
+    if not appointment_id or not appointment_id.strip():
+        raise HTTPException(status_code=400, detail="appointment_id is required")
+
+    existing = get_appointment_by_id_service(hospital_id, appointment_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    current_status = existing.get("status")
+    if current_status != "PENDIENTE_CLASIFICACION":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Solo se pueden clasificar turnos en estado PENDIENTE_CLASIFICACION. Estado actual: {current_status}",
+        )
+
+    # Resolver blood_group desde el perfil del donante
+    donor_data, donor_id = _resolve_donor_for_appointment(existing)
+    blood_group = (donor_data or {}).get("blood_group") if donor_data else None
 
     if not blood_group:
         raise HTTPException(
@@ -680,10 +735,7 @@ def confirmar_asistencia_controller(
 
     add_blood_units_by_group_service(hospital_id, blood_group, 450)
 
-    # Crear una unidad por cada componente seleccionado
-    donante_id = existing.get("donor_id")  # presente en turnos Vito, None en manuales
     unidades_creadas = []
-
     for componente in body.componentes:
         unidad = crear_unidad_service(
             componente,
@@ -691,7 +743,7 @@ def confirmar_asistencia_controller(
             UnidadCreate(
                 blood_group=blood_group,
                 turno_id=appointment_id,
-                donante_id=donante_id,
+                donante_id=donor_id,
             ),
         )
         unidades_creadas.append(UnidadResumen(
@@ -702,8 +754,26 @@ def confirmar_asistencia_controller(
             estado=unidad.estado,
         ))
 
-    return ConfirmarAsistenciaOut(
+    return ClassifyComponentsOut(
         appointment_id=appointment_id,
         status="COMPLETADO",
         unidades_creadas=unidades_creadas,
     )
+
+
+def get_pending_classifications_controller(request_id: str, current_user: dict):
+    hospital_id = resolve_hospital_id(current_user)
+
+    if not request_id or not request_id.strip():
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    hospital_request = get_hospital_request_by_id_service(hospital_id, request_id)
+    if not hospital_request:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    items = get_pending_classifications_by_request_service(hospital_id, request_id)
+    return {
+        "request_id": request_id,
+        "total": len(items),
+        "items": items,
+    }

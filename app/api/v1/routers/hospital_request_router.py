@@ -13,6 +13,7 @@ from app.api.v1.controllers.hospital_request_controller import (
     get_hospital_request_status_controller,
     get_available_blood_groups_controller,
     cancel_hospital_request_controller,
+    get_pending_classifications_by_request_controller,
 )
 from app.api.v1.services.vito_notification_service import (
     notify_vito_for_new_request,
@@ -105,6 +106,18 @@ async def get_hospital_request_status_endpoint(
 ):
     check_internal_token(x_internal_token)
     return get_hospital_request_status_controller(request_id)
+
+
+@router.get("/{request_id}/pending-classifications")
+async def get_pending_classifications_endpoint(
+    request_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Devuelve todos los turnos en estado PENDIENTE_CLASIFICACION para un pedido,
+    con información básica del donante (nombre, DNI, grupo sanguíneo).
+    """
+    return get_pending_classifications_by_request_controller(request_id, current_user)
 
 
 @router.get("/{request_id}")

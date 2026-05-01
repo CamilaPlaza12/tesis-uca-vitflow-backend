@@ -224,6 +224,22 @@ def create_donor_service(body: DonorCreate):
         raise
 
 
+def update_donor_last_donation_date_service(donor_id: str, donation_date: str):
+    try:
+        doc_ref = db.collection(COLLECTION).document(donor_id)
+        snap = doc_ref.get()
+        if not snap.exists:
+            return
+        doc_ref.update({
+            "last_donation_date": donation_date,
+            "eligibility_status": None,
+            "eligibility_checked_at": None,
+        })
+    except Exception:
+        print(f"[DONOR_SERVICE] ERROR en update_donor_last_donation_date_service donor_id={donor_id}")
+        traceback.print_exc()
+
+
 def update_donor_service(donor_id: str, patch: dict):
     try:
         print(f"[DONOR_SERVICE] update_donor_service donor_id={donor_id}")

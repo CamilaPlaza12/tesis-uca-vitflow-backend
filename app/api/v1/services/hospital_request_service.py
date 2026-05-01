@@ -54,6 +54,25 @@ def get_hospital_requests_service(hospital_id: str):
         results.append(data)
 
     results.sort(key=lambda x: x.get("datetime_local", ""), reverse=True)
+
+    # Agregar pending_classifications_count por pedido en una sola query
+    pending_docs = (
+        db.collection("appointments")
+        .where("hospital_id", "==", hospital_id)
+        .where("status", "==", "PENDIENTE_CLASIFICACION")
+        .stream()
+    )
+
+    pending_by_request: dict[str, int] = {}
+    for snap in pending_docs:
+        appt = snap.to_dict() or {}
+        req_id = appt.get("hospital_request_id", "")
+        if req_id:
+            pending_by_request[req_id] = pending_by_request.get(req_id, 0) + 1
+
+    for req in results:
+        req["pending_classifications_count"] = pending_by_request.get(req["id"], 0)
+
     return results
 
 
