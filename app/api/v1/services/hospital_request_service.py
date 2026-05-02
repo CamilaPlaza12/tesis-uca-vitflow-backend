@@ -142,14 +142,12 @@ def update_hospital_request_service(hospital_id: str, request_id: str, patch: di
     return updated
 
 
-def find_active_auto_request_by_blood_group_service(hospital_id: str, blood_group: str, componente: str):
-    request_component = COMPONENTE_TO_REQUEST_COMPONENT.get(componente, componente.upper())
+def find_active_auto_request_by_blood_group_service(hospital_id: str, blood_group: str):
     docs = (
         db.collection(COLLECTION)
         .where("hospital_id", "==", hospital_id)
         .where("status", "==", "ACTIVO")
         .where("blood_group", "==", blood_group)
-        .where("component", "==", request_component)
         .where("requested_by", "==", "Sistema")
         .limit(1)
         .stream()
@@ -182,6 +180,7 @@ def create_auto_low_stock_request_service(hospital_id: str, blood_group: str, co
         "request_type": "NORMAL",
         "tipo": "automatico",
         "end_date": end_date,
+        "componentes_faltantes": [request_component],
     }
 
     res = db.collection(COLLECTION).add(data)
@@ -189,20 +188,30 @@ def create_auto_low_stock_request_service(hospital_id: str, blood_group: str, co
     return {"id": doc_ref.id, **data}
 
 
-def process_expired_auto_requests_service(hospital_id: str, blood_group: str, componente: str):
+def add_componente_to_auto_request_service(request_id: str, componente: str) -> None:
+    request_component = COMPONENTE_TO_REQUEST_COMPONENT.get(componente, componente.upper())
+    ref = db.collection(COLLECTION).document(request_id)
+    snap = ref.get()
+    if not snap.exists:
+        return
+    data = snap.to_dict() or {}
+    existing = data.get("componentes_faltantes") or []
+    if request_component not in existing:
+        ref.update({"componentes_faltantes": existing + [request_component]})
+
+
+def process_expired_auto_requests_service(hospital_id: str, blood_group: str):
     """
-    Cierra (FINALIZADO) los pedidos automáticos ACTIVOS vencidos para ese blood_group + componente.
+    Cierra (FINALIZADO) los pedidos automáticos ACTIVOS vencidos para ese blood_group.
     Retorna cuántos se cerraron.
     """
     now_dt = datetime.now(BA_TZ)
-    request_component = COMPONENTE_TO_REQUEST_COMPONENT.get(componente, componente.upper())
 
     docs = (
         db.collection(COLLECTION)
         .where("hospital_id", "==", hospital_id)
         .where("status", "==", "ACTIVO")
         .where("blood_group", "==", blood_group)
-        .where("component", "==", request_component)
         .where("requested_by", "==", "Sistema")
         .stream()
     )

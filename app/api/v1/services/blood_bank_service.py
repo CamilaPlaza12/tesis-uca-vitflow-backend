@@ -8,6 +8,7 @@ from app.api.v1.services.hospital_request_service import (
     find_active_auto_request_by_blood_group_service,
     create_auto_low_stock_request_service,
     process_expired_auto_requests_service,
+    add_componente_to_auto_request_service,
 )
 from app.api.v1.services.vito_notification_service import notify_vito_for_new_request
 
@@ -66,11 +67,15 @@ def ensure_auto_request_if_low_service(hospital_id: str, componente: str, blood_
         logger.info("[AUTO-REQUEST] disponibles(%d) >= umbral(%d) → skip", stock_count, umbral_minimo)
         return
 
-    process_expired_auto_requests_service(hospital_id, blood_group, componente)
+    process_expired_auto_requests_service(hospital_id, blood_group)
 
-    existing = find_active_auto_request_by_blood_group_service(hospital_id, blood_group, componente)
+    existing = find_active_auto_request_by_blood_group_service(hospital_id, blood_group)
     if existing:
-        logger.info("[AUTO-REQUEST] ya existe pedido activo id=%s → skip", existing.get("id"))
+        logger.info(
+            "[AUTO-REQUEST] ya existe pedido activo id=%s para blood_group=%s → acumulando componente=%s",
+            existing.get("id"), blood_group, componente,
+        )
+        add_componente_to_auto_request_service(existing["id"], componente)
         return
 
     logger.info("[AUTO-REQUEST] creando pedido para %s/%s/%s (disponibles=%d < umbral=%d)",
