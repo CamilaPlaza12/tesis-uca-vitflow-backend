@@ -1,0 +1,237 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from fastapi import HTTPException
+
+from app.schemas.hospital_request_schema import HospitalRequestCreate, UpdateHospitalRequestRequest
+from app.api.v1.services.hospital_request_service import (
+    create_hospital_request_service,
+    get_hospital_requests_service,
+    update_hospital_request_service,
+    get_hospital_request_by_id_service,
+    get_hospital_request_any_service,
+    get_hospital_request_status_service,
+    find_active_manual_request_service,
+    get_available_blood_groups_service,
+)
+from app.api.v1.services.appointment_service import (
+    cancel_appointments_by_request_service,
+    get_pending_classifications_by_request_service,
+)
+from app.api.v1.services.evento_service import (
+    sync_evento_cancelado_by_pedido_id,
+    sync_evento_finalizado_by_pedido_id,
+)
+from app.utils.auth_utils import resolve_hospital_id
+
+BA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
+
+VALID_BLOOD_GROUPS = {"O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"}
+VALID_COMPONENTS = {"SANGRE", "PLAQUETAS", "MEDULA_OSEA"}
+
+
+def _parse_iso_datetime_or_400(value: str, field_name: str) -> datetime:
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BA_TZ)
+        return dt
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be a valid ISO datetime")
+
+
+def create_hospital_request_controller(body: HospitalRequestCreate, current_user: dict):
+    hospital_id = resolve_hospital_id(current_user)
+
+    blood_group = body.blood_group.strip().upper()
+    if blood_group not in VALID_BLOOD_GROUPS:
+        raise HTTPException(status_code=400, detail="Invalid blood_group")
+
+    component = body.component.strip().upper()
+    if component not in VALID_COMPONENTS:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid component (use SANGRE / PLAQUETAS / MEDULA_OSEA)",
+        )
+
+    requested_by = body.requested_by.strip()
+    if not requested_by:
+        raise HTTPException(status_code=400, detail="requested_by is required")
+
+    end_dt = _parse_iso_datetime_or_400(body.end_date, "end_date")
+    now_ba = datetime.now(BA_TZ)
+    if end_dt <= now_ba:
+        raise HTTPException(status_code=400, detail="end_date must be in the future")
+
+    if body.tipo == "manual":
+        existing = find_active_manual_request_service(hospital_id, blood_group, component)
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail="Ya existe un pedido activo manual para este tipo de sangre y componente",
+            )
+
+    now_ba_iso = now_ba.isoformat(timespec="seconds")
+
+    return create_hospital_request_service(
+        hospital_id=hospital_id,
+        body=body,
+        now_ba_iso=now_ba_iso,
+        normalized_blood_group=blood_group,
+        normalized_component=component,
+    )
+
+
+def get_hospital_requests_controller(current_user: dict):
+    hospital_id = resolve_hospital_id(current_user)
+    return get_hospital_requests_service(hospital_id)
+
+
+def update_hospital_request_controller(
+    request_id: str,
+    body: UpdateHospitalRequestRequest,
+    current_user: dict,
+):
+    hospital_id = resolve_hospital_id(current_user)
+
+    existing = get_hospital_request_by_id_service(hospital_id, request_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    existing_status = existing.get("status")
+
+    if existing_status in {"COMPLETO", "CANCELADO"}:
+        raise HTTPException(
+            status_code=409,
+            detail="HospitalRequest cannot be edited in terminal status",
+        )
+
+    patch = body.model_dump(exclude_unset=True)
+
+    if existing_status == "FINALIZADO":
+        raise HTTPException(
+            status_code=409,
+            detail="FINALIZADO requests cannot be edited (only automatic transition to COMPLETO)",
+        )
+
+    if patch.get("status") == "COMPLETO":
+        raise HTTPException(
+            status_code=400,
+            detail="COMPLETO status is automatic and cannot be set manually",
+        )
+
+    if "end_date" in patch and patch["end_date"] is not None:
+        end_dt = _parse_iso_datetime_or_400(patch["end_date"], "end_date")
+        now_ba = datetime.now(BA_TZ)
+        if end_dt <= now_ba:
+            raise HTTPException(status_code=400, detail="end_date must be in the future")
+
+    is_cancelling = patch.get("status") == "CANCELADO" and existing_status != "CANCELADO"
+    is_finalizing = patch.get("status") == "FINALIZADO" and existing_status != "FINALIZADO"
+
+    if "comments" in patch:
+        c = (patch["comments"] or "").strip()
+        patch["comments"] = c or None
+
+    if not patch:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    updated_req = update_hospital_request_service(hospital_id, request_id, patch)
+
+    if is_cancelling:
+        cancel_appointments_by_request_service(hospital_id, request_id)
+
+    if is_finalizing and existing.get("request_type") == "EVENTO":
+        sync_evento_finalizado_by_pedido_id(request_id)
+
+    return updated_req
+
+
+def cancel_hospital_request_controller(request_id: str, current_user: dict) -> dict:
+    hospital_id = resolve_hospital_id(current_user)
+
+    existing = get_hospital_request_by_id_service(hospital_id, request_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    current_status = existing.get("status")
+
+    if current_status == "CANCELADO":
+        raise HTTPException(status_code=409, detail="HospitalRequest is already canceled")
+
+    if current_status in {"COMPLETO", "FINALIZADO"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot cancel a request in {current_status} status",
+        )
+
+    # Step 1: cancel the request
+    update_hospital_request_service(hospital_id, request_id, {"status": "CANCELADO"})
+
+    # Step 2-5: cancel appointments, collect VITO_WHATSAPP donor ids
+    result = cancel_appointments_by_request_service(hospital_id, request_id)
+
+    # Step 6: sync related evento (evento.estado is a write-through cache of the request state)
+    # If no evento exists for this request (non-EVENTO requests), skip silently.
+    # If the update fails, raise immediately — callers must not assume success.
+    sync_evento_cancelado_by_pedido_id(request_id)
+
+    return {
+        "id": request_id,
+        "status": "CANCELADO",
+        "cancelled_appointments": result["cancelled_count"],
+        "donor_ids_to_notify": result["donor_ids"],
+    }
+
+
+def get_hospital_request_status_controller(request_id: str) -> dict:
+    req = get_hospital_request_status_service(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+    return req
+
+
+def get_hospital_request_by_id_controller(request_id: str, current_user: dict):
+    # El internal token (Vito) no tiene hospital_id; puede leer cualquier pedido por ID.
+    if current_user.get("uid") == "INTERNAL_SERVICE":
+        req = get_hospital_request_any_service(request_id)
+        if not req:
+            raise HTTPException(status_code=404, detail="HospitalRequest not found")
+        return req
+
+    hospital_id = resolve_hospital_id(current_user)
+
+    req = get_hospital_request_by_id_service(hospital_id, request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    return req
+
+
+def get_available_blood_groups_controller(componente: str, current_user: dict) -> dict:
+    hospital_id = resolve_hospital_id(current_user)
+    component = componente.strip().upper()
+    if component not in VALID_COMPONENTS:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid component (use SANGRE / PLAQUETAS / MEDULA_OSEA)",
+        )
+    return get_available_blood_groups_service(hospital_id, component)
+
+
+def get_pending_classifications_by_request_controller(request_id: str, current_user: dict) -> dict:
+    hospital_id = resolve_hospital_id(current_user)
+
+    if not request_id or not request_id.strip():
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    hospital_request = get_hospital_request_by_id_service(hospital_id, request_id)
+    if not hospital_request:
+        raise HTTPException(status_code=404, detail="HospitalRequest not found")
+
+    items = get_pending_classifications_by_request_service(hospital_id, request_id)
+    return {
+        "request_id": request_id,
+        "total": len(items),
+        "items": items,
+    }

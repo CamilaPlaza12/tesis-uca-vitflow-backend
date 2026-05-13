@@ -1,0 +1,131 @@
+from app.api.v1.controllers.nearby_donor_controller import get_nearby_donors_for_request_controller
+from app.schemas.nearby_donor_schema import NearbyDonorsResponse
+from fastapi import APIRouter, Depends
+
+from app.core.security import get_current_user
+from app.schemas.donor_schema import DonorCreate, DonorUpdate, AddressValidationIn
+from app.schemas.donor_rejection_schema import DonorRejectionRequest, DonorRejectionOut
+from app.api.v1.controllers.donor_controller import (
+    validate_address_controller,
+    create_donor_controller,
+    get_donor_by_id_controller,
+    get_donor_by_dni_controller,
+    update_donor_controller,
+    get_all_donors_controller,
+    get_donors_by_blood_group_controller,
+    evaluate_donor_eligibility_controller,
+    get_nearby_donation_opportunities_for_donor_controller,
+    get_campaigns_for_donor_controller,
+    reject_invitation_controller,
+)
+
+router = APIRouter(prefix="/donors", tags=["Donors"])
+
+
+@router.post("/validate-address")
+async def validate_address_endpoint(
+    body: AddressValidationIn,
+    current_user: dict = Depends(get_current_user),
+):
+    return validate_address_controller(body, current_user)
+
+
+@router.post("/")
+async def create_donor_endpoint(
+    body: DonorCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    return create_donor_controller(body, current_user)
+
+
+@router.get("/by-dni/{dni}")
+async def get_donor_by_dni_endpoint(
+    dni: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_donor_by_dni_controller(dni, current_user)
+
+
+@router.get("/by-dni/{dni}/donation-opportunities")
+async def get_nearby_donation_opportunities_for_donor_endpoint(
+    dni: str,
+    radius_km: float = 5.0,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_nearby_donation_opportunities_for_donor_controller(dni, radius_km, current_user)
+
+
+@router.get("/by-dni/{dni}/campaigns")
+async def get_campaigns_for_donor_endpoint(
+    dni: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_campaigns_for_donor_controller(dni, current_user)
+
+
+@router.get("/")
+async def get_all_donors_endpoint(
+    current_user: dict = Depends(get_current_user),
+):
+    return get_all_donors_controller(current_user)
+
+
+@router.get("/by-blood-group/{blood_group}")
+async def get_donors_by_blood_group_endpoint(
+    blood_group: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_donors_by_blood_group_controller(blood_group, current_user)
+
+
+@router.post("/{donor_id}/evaluate-eligibility")
+async def evaluate_donor_eligibility_endpoint(
+    donor_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return evaluate_donor_eligibility_controller(donor_id, current_user)
+
+
+@router.get("/{donor_id}")
+async def get_donor_by_id_endpoint(
+    donor_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_donor_by_id_controller(donor_id, current_user)
+
+
+@router.patch("/{donor_id}")
+async def update_donor_endpoint(
+    donor_id: str,
+    body: DonorUpdate,
+    current_user: dict = Depends(get_current_user),
+):
+    return update_donor_controller(donor_id, body, current_user)
+
+
+@router.post("/{donor_id}/reject-invitation", response_model=DonorRejectionOut)
+async def reject_invitation_endpoint(
+    donor_id: str,
+    body: DonorRejectionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Registra la respuesta de un donante a una invitación de Vito.
+    - not_now: no puede donar en este momento; sigue suscripto.
+    - opt_out: no quiere más avisos; setea is_subscribed = False.
+    - no_response: timeout de 30 minutos sin respuesta; no modifica is_subscribed.
+    """
+    return reject_invitation_controller(donor_id, body, current_user)
+
+
+@router.get("/nearby-for-request/{request_id}", response_model=NearbyDonorsResponse)
+async def get_nearby_donors_for_request_endpoint(
+    request_id: str,
+    radius_km: float = 5.0,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_nearby_donors_for_request_controller(
+        request_id,
+        radius_km,
+        current_user,
+    )

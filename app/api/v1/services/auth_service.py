@@ -89,3 +89,53 @@ async def get_user_profile(uid: str):
     if not doc.exists:
         return None
     return doc.to_dict()
+
+async def get_hospital_id_for_uid(uid: str) -> str:
+    profile = await get_user_profile(uid)
+
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"User profile not found for uid={uid}",
+        )
+
+    hospital_id = profile.get("hospitalId")  # 👈 como lo tenés en Firestore
+
+    if not hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"User uid={uid} has no hospitalId assigned",
+        )
+
+    return str(hospital_id)
+
+async def get_me_full_service(uid: str) -> dict | None:
+    profile = await get_user_profile(uid)
+
+    if not profile:
+        return None
+
+    hospital_id = profile.get("hospitalId") or profile.get("hospital_id")
+
+    hospital_data = None
+    if hospital_id:
+        snap = db.collection("hospitals").document(hospital_id).get()
+        if snap.exists:
+            hospital_data = snap.to_dict() or {}
+            hospital_data["id"] = snap.id
+
+    return {
+        "user": {
+            "uid": profile.get("uid", uid),
+            "email": profile.get("email"),
+            "firstName": profile.get("firstName"),
+            "lastName": profile.get("lastName"),
+            "phone": profile.get("phone") or profile.get("phone_number"),
+            "dni": profile.get("dni"),
+            "role": profile.get("role"),
+            "status": profile.get("status"),
+            "hospitalId": hospital_id,
+            "createdAt": profile.get("createdAt"),
+        },
+        "hospital": hospital_data,
+    }

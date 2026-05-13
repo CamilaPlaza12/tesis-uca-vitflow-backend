@@ -1,0 +1,128 @@
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, Header
+
+from app.core.security import get_current_user
+from app.core.internal_auth import check_internal_token
+from app.schemas.hospital_request_schema import HospitalRequestCreate, UpdateHospitalRequestRequest
+from app.api.v1.controllers.hospital_request_controller import (
+    create_hospital_request_controller,
+    get_hospital_requests_controller,
+    update_hospital_request_controller,
+    get_hospital_request_by_id_controller,
+    get_hospital_request_status_controller,
+    get_available_blood_groups_controller,
+    cancel_hospital_request_controller,
+    get_pending_classifications_by_request_controller,
+)
+from app.api.v1.services.vito_notification_service import (
+    notify_vito_for_new_request,
+    notify_vito_for_canceled_request,
+)
+from app.utils.auth_utils import resolve_hospital_id
+
+logger = logging.getLogger("vitflow.hospital_request")
+
+router = APIRouter(prefix="/hospital-requests", tags=["HospitalRequests"])
+
+@router.post("/")
+async def create_hospital_request_endpoint(
+    body: HospitalRequestCreate,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    result = create_hospital_request_controller(body, current_user)
+
+    request_id = result.get("id")
+    hospital_id = resolve_hospital_id(current_user)
+
+    logger.info(
+        "[PEDIDO] Pedido creado — request_id=%s hospital_id=%s blood_group=%s component=%s priority=%s",
+        request_id,
+        hospital_id,
+        result.get("blood_group"),
+        result.get("component"),
+        result.get("priority"),
+    )
+    logger.info(
+        "[PEDIDO] Agendando notificación a Vito en background — request_id=%s",
+        request_id,
+    )
+
+    background_tasks.add_task(notify_vito_for_new_request, hospital_id, request_id)
+
+    return result
+
+@router.get("/")
+async def get_hospital_requests_endpoint(
+    current_user: dict = Depends(get_current_user),
+):
+    return get_hospital_requests_controller(current_user)
+
+# Ruta estática: debe ir ANTES de /{request_id} para evitar conflictos
+@router.get("/tipos-sangre-disponibles")
+async def get_tipos_sangre_disponibles_endpoint(
+    componente: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_available_blood_groups_controller(componente, current_user)
+
+@router.post("/{request_id}/cancel")
+async def cancel_hospital_request_endpoint(
+    request_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    result = cancel_hospital_request_controller(request_id, current_user)
+
+    hospital_id = resolve_hospital_id(current_user)
+    donor_ids = result.get("donor_ids_to_notify", [])
+
+    logger.info(
+        "[PEDIDO][CANCEL] Pedido cancelado — request_id=%s hospital_id=%s cancelled_appointments=%d donors_a_notificar=%d",
+        request_id,
+        hospital_id,
+        result.get("cancelled_appointments", 0),
+        len(donor_ids),
+    )
+
+    background_tasks.add_task(notify_vito_for_canceled_request, hospital_id, request_id, donor_ids)
+
+    return result
+
+
+@router.patch("/{request_id}")
+async def update_hospital_request_endpoint(
+    request_id: str,
+    body: UpdateHospitalRequestRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    return update_hospital_request_controller(request_id, body, current_user)
+
+@router.get("/{request_id}/status")
+async def get_hospital_request_status_endpoint(
+    request_id: str,
+    x_internal_token: str | None = Header(default=None),
+):
+    check_internal_token(x_internal_token)
+    return get_hospital_request_status_controller(request_id)
+
+
+@router.get("/{request_id}/pending-classifications")
+async def get_pending_classifications_endpoint(
+    request_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Devuelve todos los turnos en estado PENDIENTE_CLASIFICACION para un pedido,
+    con información básica del donante (nombre, DNI, grupo sanguíneo).
+    """
+    return get_pending_classifications_by_request_controller(request_id, current_user)
+
+
+@router.get("/{request_id}")
+async def get_hospital_request_by_id_endpoint(
+    request_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return get_hospital_request_by_id_controller(request_id, current_user)
