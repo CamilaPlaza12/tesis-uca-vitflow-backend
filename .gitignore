@@ -3,6 +3,8 @@ __pycache__/
 *.py[codz]
 *$py.class
 CLAUDE.md
+.claude
+.env
 # C extensions
 *.so
 
