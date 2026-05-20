@@ -25,6 +25,8 @@ app.add_middleware(
         "http://127.0.0.1:4200",
         "http://127.0.0.1:8000",
         "https://vitflow-mu.vercel.app",
+        "https://vitflow-cplaza-finals-projects.vercel.app",
+        "https://vitflow-mu.vercel.app/"
     ],
     allow_credentials=True,
     allow_methods=["*"],
