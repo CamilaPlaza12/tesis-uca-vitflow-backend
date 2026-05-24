@@ -510,3 +510,68 @@ def search_appointments_by_range_service(hospital_id: str, desde: date, hasta: d
         results.append(data)
 
     return results
+
+def mark_past_appointments_no_presentado_service() -> int:
+    """Marca como NO_PRESENTADO todos los turnos activos cuya fecha ya pasó."""
+    today_str = date.today().isoformat()
+
+    docs = (
+        db.collection("appointments")
+        .where("date_local", "<", today_str)
+        .stream()
+    )
+
+    updated = 0
+    for snap in docs:
+        data = snap.to_dict() or {}
+        if data.get("status") not in ACTIVE_APPOINTMENT_STATUSES:
+            continue
+        db.collection("appointments").document(snap.id).update({"status": "NO_PRESENTADO"})
+        updated += 1
+        print(f"[SCHEDULER] Turno {snap.id} marcado NO_PRESENTADO (date={data.get('date_local')})")
+
+    return updated
+
+
+def get_appointments_for_reminder_service(target_date_str: str) -> list:
+    """Retorna turnos activos para target_date_str con datos necesarios para el recordatorio."""
+    from app.api.v1.services.donor_service import get_donor_by_dni_service
+
+    docs = (
+        db.collection("appointments")
+        .where("date_local", "==", target_date_str)
+        .stream()
+    )
+
+    results = []
+    for snap in docs:
+        data = snap.to_dict() or {}
+        if data.get("status") not in ACTIVE_APPOINTMENT_STATUSES:
+            continue
+
+        donor_embed = data.get("donor") or {}
+        dni = donor_embed.get("dni", "")
+        donor_name = donor_embed.get("full_name", "")
+
+        phone_number = None
+        if dni:
+            donor_record = get_donor_by_dni_service(dni)
+            if donor_record:
+                phone_number = donor_record.get("phone_number")
+
+        if not phone_number:
+            print(f"[SCHEDULER] Turno {snap.id}: sin phone_number para DNI={dni}, se omite")
+            continue
+
+        hospital_name = _get_hospital_name(data.get("hospital_id")) or ""
+
+        results.append({
+            "appointment_id": snap.id,
+            "phone_number": phone_number,
+            "donor_name": donor_name,
+            "date_local": data.get("date_local", ""),
+            "time_local": data.get("time_local", ""),
+            "hospital_name": hospital_name,
+        })
+
+    return results
