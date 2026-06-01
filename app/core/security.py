@@ -10,6 +10,7 @@ security_scheme = HTTPBearer(auto_error=False)
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
     x_internal_token: str | None = Header(default=None),
+    x_hospital_id: str | None = Header(default=None),
 ):
     # Auth interna (Vito)
     if x_internal_token is not None:
@@ -18,7 +19,7 @@ async def get_current_user(
             "uid": "INTERNAL_SERVICE",
             "role": "HOSPITAL_ADMIN",
             "status": "ACTIVE",
-            "hospitalId": None,
+            "hospitalId": (x_hospital_id or "").strip() or None,
         }
 
     if credentials is None:
