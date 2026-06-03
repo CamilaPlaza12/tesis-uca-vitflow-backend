@@ -3,6 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from firebase_admin import auth as firebase_auth
 from app.core.internal_auth import check_internal_token
 from app.firebase.firebase_client import db
+from app.core.config import SUPERADMIN_UID
 
 security_scheme = HTTPBearer(auto_error=False)
 
@@ -86,5 +87,28 @@ def require_admin(current_user: dict = Depends(get_current_user)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo ADMIN puede realizar esta acción",
+        )
+    return current_user
+
+
+def require_superadmin(current_user: dict = Depends(get_current_user)):
+    if not SUPERADMIN_UID:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="SUPERADMIN_UID no configurado en el servidor",
+        )
+    if current_user.get("uid") != SUPERADMIN_UID:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acceso denegado: se requiere superadmin",
+        )
+    return current_user
+
+
+def require_hospital_admin(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "HOSPITAL_ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo el administrador del hospital puede realizar esta acción",
         )
     return current_user

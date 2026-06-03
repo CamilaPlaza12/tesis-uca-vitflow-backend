@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_hospital_admin
 from app.api.v1.controllers.availability_controller import (
     get_hospital_availability_controller,
     save_hospital_availability_controller,
@@ -19,7 +19,7 @@ def get_hospital_availability(user=Depends(get_current_user)):
 @router.put("", response_model=HospitalAvailabilityOut)
 def put_hospital_availability(
     body: HospitalAvailabilityIn,
-    user=Depends(get_current_user),
+    user=Depends(require_hospital_admin),
 ):
     hospital_id = resolve_hospital_id(user)
     return save_hospital_availability_controller(hospital_id, body)

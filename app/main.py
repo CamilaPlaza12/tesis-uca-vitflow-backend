@@ -21,14 +21,25 @@ from app.api.v1.routers import auth_router, appointment_router, availability_rou
 from app.api.v1.routers import stock_router
 from app.api.v1.routers import donacion_router
 from app.api.v1.routers import evento_router
+from app.api.v1.routers import admin_router
 from app.firebase import firebase_client
 
 from app.api.v1.services.appointment_service import (
     mark_past_appointments_no_presentado_service,
     get_appointments_for_reminder_service,
 )
+from app.api.v1.services.hospital_request_service import finalize_all_expired_requests_service
 
 TZ_BA = ZoneInfo("America/Argentina/Buenos_Aires")
+
+
+async def _job_finalize_expired_requests():
+    print("[SCHEDULER] Ejecutando job: finalizar pedidos vencidos")
+    try:
+        count = finalize_all_expired_requests_service()
+        print(f"[SCHEDULER] Pedidos finalizados: {count}")
+    except Exception as e:
+        print(f"[SCHEDULER] Error en finalize_expired_requests: {e}")
 
 
 async def _job_mark_no_presentado():
@@ -79,7 +90,8 @@ async def _job_send_reminders():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler(timezone=TZ_BA)
-    scheduler.add_job(_job_mark_no_presentado, CronTrigger(hour=3, minute=0, timezone=TZ_BA))
+    scheduler.add_job(_job_finalize_expired_requests, CronTrigger(hour=0, minute=5, timezone=TZ_BA))
+    scheduler.add_job(_job_mark_no_presentado, CronTrigger(hour=0, minute=10, timezone=TZ_BA))
     scheduler.add_job(_job_send_reminders, CronTrigger(hour=8, minute=0, timezone=TZ_BA))
     scheduler.start()
     print("[SCHEDULER] APScheduler iniciado")
@@ -123,6 +135,7 @@ app.include_router(home_router.router, prefix=API_V1_PREFIX)
 app.include_router(stock_router.router, prefix=API_V1_PREFIX)
 app.include_router(donacion_router.router, prefix=API_V1_PREFIX)
 app.include_router(evento_router.router, prefix=API_V1_PREFIX)
+app.include_router(admin_router.router, prefix=API_V1_PREFIX)
 
 
 

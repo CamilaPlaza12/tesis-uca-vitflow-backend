@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
@@ -252,6 +252,32 @@ def find_active_manual_request_service(hospital_id: str, blood_group: str, compo
         data["id"] = doc.id
         return data
     return None
+
+
+def finalize_all_expired_requests_service() -> int:
+    """Marca como FINALIZADO todos los pedidos ACTIVOS cuyo end_date ya pasó."""
+    today_str = date.today().isoformat()
+
+    docs = (
+        db.collection(COLLECTION)
+        .where("status", "==", "ACTIVO")
+        .stream()
+    )
+
+    updated = 0
+    for snap in docs:
+        data = snap.to_dict() or {}
+        end_date_str = (data.get("end_date") or "").strip()
+        if not end_date_str:
+            continue
+        # end_date puede ser "YYYY-MM-DD" o "YYYY-MM-DDTHH:MM:SS..."
+        end_date_prefix = end_date_str[:10]
+        if end_date_prefix <= today_str:
+            snap.reference.update({"status": "FINALIZADO"})
+            updated += 1
+            print(f"[SCHEDULER] Pedido {snap.id} finalizado (end_date={end_date_str})")
+
+    return updated
 
 
 def get_available_blood_groups_service(hospital_id: str, component: str) -> dict:
