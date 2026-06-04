@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_hospital_admin
 from app.schemas.stock_schema import (
     AgregarRequest,
     DashboardResumenOut,
@@ -75,7 +75,7 @@ def listar_umbrales_endpoint(
 @router.post("/umbrales", response_model=UmbralOut, status_code=201)
 def crear_o_actualizar_umbral_endpoint(
     body: UmbralCreate,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_hospital_admin),
 ):
     """El hospital_id se obtiene del token autenticado, no viene en el body."""
     return crear_o_actualizar_umbral_controller(body, current_user)
@@ -85,14 +85,14 @@ def crear_o_actualizar_umbral_endpoint(
 def actualizar_umbral_endpoint(
     umbral_id: str,
     body: UmbralPatch,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_hospital_admin),
 ):
     return actualizar_umbral_controller(umbral_id, body, current_user)
 
 
 @router.post("/umbrales/inicializar", response_model=InicializarUmbralesOut, status_code=201)
 def inicializar_umbrales_endpoint(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_hospital_admin),
 ):
     """
     Inicializa los 24 umbrales por defecto para el hospital del usuario autenticado.
