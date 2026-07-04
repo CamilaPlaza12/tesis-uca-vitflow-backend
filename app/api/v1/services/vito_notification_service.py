@@ -1,7 +1,7 @@
 import logging
 import httpx
 
-from app.core.config import VITO_NOTIFY_URL, VITO_NOTIFY_TIMEOUT
+from app.core.config import VITO_NOTIFY_URL, VITO_NOTIFY_TIMEOUT, INTERNAL_TOKEN
 from app.api.v1.services.nearby_donor_service import get_nearby_donors_for_request_service
 from app.firebase.firebase_client import db
 
@@ -135,6 +135,7 @@ def notify_vito_for_new_request(hospital_id: str, request_id: str) -> None:
         response = httpx.post(
             VITO_NOTIFY_URL,
             json=payload,
+            headers={"x-internal-token": INTERNAL_TOKEN},
             timeout=VITO_NOTIFY_TIMEOUT,
         )
         logger.info(
